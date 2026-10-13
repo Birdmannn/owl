@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["session-lock", "tests"]
+
+[profile.release]
+opt-level = "s"
+overflow-checks = true
+lto = true
+codegen-units = 1
+panic = "abort"

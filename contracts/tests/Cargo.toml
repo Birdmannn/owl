@@ -1,0 +1,8 @@
+[package]
+name = "pilot-contract-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+ckb-testtool = "=1.1.1"
+k256 = { version = "0.13.4", features = ["ecdsa"] }

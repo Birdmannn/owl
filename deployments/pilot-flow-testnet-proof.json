@@ -1,0 +1,36 @@
+{
+  "verifiedDate": "2026-10-12",
+  "network": "ckb-testnet",
+  "walletFlow": "Pilot wallet option \u2192 existing CCC EIP-6963 owner wallet \u2192 local profile \u2192 explicit manifest selection \u2192 on-chain session",
+  "signerVerification": "Injected EIP-6963 provider; real testnet owner signatures, session signatures, broadcasts, and confirmations. No manual extension-wallet test.",
+  "grant": {
+    "version": 1,
+    "manifestHash": "0x2e909a1e4fc733ef587ad542a0a5f04a2dee1bf88d2b2aebd99d6c44f1ca5dd8",
+    "permissions": [
+      "counter.increment"
+    ]
+  },
+  "authorization": "0xde198803bccab60259069e374880fbb97f1e9afdbcca39796a67fa68a9e86e61",
+  "moves": [
+    "0xf061b107190e1cb4da0ec7440afcaa2c231a6648c6d92551b6d6e7dae41499a1",
+    "0x47dae8f4f5d431fd039481072e513922e4ef02f132f56cad5c753cacc0d592f1"
+  ],
+  "revocation": "0xf690385986b186491731c2aa48370e6b18f28b0c5691d5e9d05f20b6f787b020",
+  "ownerSignatures": {
+    "authorization": 1,
+    "moves": 0,
+    "revocation": 1,
+    "total": 2
+  },
+  "checks": [
+    "Pilot appears in the wallet chooser",
+    "Existing owner wallet connected through CCC",
+    "Profile created and restored",
+    "Owner balance displayed",
+    "No automatic signing without explicit action selection",
+    "Manifest grant persisted",
+    "Two instant moves confirmed without owner prompts",
+    "Position and budget restored after reload",
+    "Owner reclaimed session capacity"
+  ]
+}

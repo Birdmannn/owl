@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.pilot/
+contracts/target/
+contracts/build/
+.env
+.env.*
+!.env.example
+data/pilot-usernames.json
+data/pilot-usernames.json.*

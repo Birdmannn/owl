@@ -1,0 +1,3 @@
+[target.riscv64imac-unknown-none-elf]
+# CKB-VM is single-threaded and does not support RISC-V atomic instructions.
+rustflags = ["-C", "passes=lower-atomic"]

@@ -1,0 +1,37 @@
+{
+  "verifiedDate": "2026-10-12",
+  "deployment": {
+    "network": "testnet",
+    "codeHash": "0x1d3dc6f80f4df37c708ffbbcb47c7e6dc3bc278321f0b47a45ca22196ae7d483",
+    "outPoint": {
+      "txHash": "0xd542a9e72b9dc3b8d81c8c067c618a2666f960e37aeed5937203bac1f84065b9",
+      "index": 0
+    },
+    "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606"
+  },
+  "authorization": "0x81088c7a79e131506b6a1382619d105e9c556646e9fe5d8fcf94750c7c7fcef1",
+  "moves": [
+    "0x1f52b12ac76527285da4529b3dec0ce676386bcdfe21156a6e2cbe27682e540c",
+    "0xecbe6525b520258626c014db3fac22e9beba7dbe22f126db2f0cc191505c0df7"
+  ],
+  "rejectionChecks": {
+    "forbiddenMove": {
+      "code": 8,
+      "transactionHash": "0xfcd8eed65d121bb29a1c55321fdb0e564cd20d78108e5991b5da4f4800eaf10d"
+    },
+    "overspend": {
+      "code": 9,
+      "transactionHash": "0x21ef2e072c815ab591142c0eba3b16bb6892434e1f12e0e17cf7ac55d24c1e6f"
+    },
+    "execution": "testnet node CKB-VM dry-run; rejected transactions are not committed"
+  },
+  "revocation": "0xe3b29099827dbac10da5ac53295168165011d7bb4be43d982feeda3f79444be9",
+  "policy": {
+    "name": "counter-v1",
+    "feeBudgetShannons": "300000",
+    "feePerMoveShannons": "100000",
+    "capacityFloorShannons": "15000000000",
+    "expiryEnforcement": "local only"
+  },
+  "signerVerification": "CLI generated test-only CCC owner signer; browser wallet flow not manually tested"
+}

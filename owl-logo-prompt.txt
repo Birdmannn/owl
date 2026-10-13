@@ -1,0 +1,5 @@
+Tool: built-in image_gen
+Use case: logo-brand
+Asset type: square pixel-art owl logo PNG.
+Input image 1: style and color reference only, the supplied small green pixel-art character on white.
+Primary request: Create an owl logo just like the reference in pixelated style. Replace the human character with one unmistakable front-facing owl. Match the reference's vivid neon/lime green flat fills, sparse black and dark-green one-pixel contours, white negative space, coarse low-resolution square pixel grid, and slightly rough old-school sprite charm. Owl has two pointed ear tufts, large paired round pixel eyes with dark pupils, a small central beak, compact body, folded wings and two small feet. Simple memorable silhouette, readable at tiny avatar size. Center the single owl with white margins similar to the reference. Keep the amount of detail and scale of pixel blocks comparable to the reference: intentionally chunky pixels, hard square stair-step edges, no smooth vector curves. White square background. No lettering, no swords, no extra objects, no gradients, no glow, no shadows, no 3D, no mockup, no watermark. Deliver only the logo.

@@ -1,0 +1,24 @@
+{
+  "verifiedDate": "2026-10-12",
+  "network": "ckb-testnet",
+  "walletFlow": "CCC connector with an injected EIP-6963 provider; real testnet funding, signing, broadcasts, and confirmations",
+  "authorization": "0xb3c657bee8aa8cf190ab6f03f7459efad1edc74d6bc9bfa4fff71a456bad9fd3",
+  "moves": [
+    "0xecd683df0c1188f17737cf11b555d5e7320f0cab65e7d0d9b426c2bb08e002a2",
+    "0x55edcd26cbb012c4acb88a8a69764561a36be026bc3bde67117f9b6413438a9c"
+  ],
+  "revocation": "0x81167bfe29488a77d129a39f3791c49d702526c8eb4429265a85ab409d3aabc4",
+  "ownerSignatures": {
+    "authorization": 1,
+    "moves": 0,
+    "revocation": 1
+  },
+  "checks": [
+    "Wallet discovery and connection",
+    "Two optimistic moves before chain settlement",
+    "Durable signed transaction replay after reload",
+    "Both increments confirmed on CKB",
+    "Restored position and budget after reload",
+    "Owner reclaimed capacity"
+  ]
+}

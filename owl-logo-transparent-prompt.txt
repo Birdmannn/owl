@@ -1,0 +1,2 @@
+Tool: built-in image_gen
+Use case: background-extraction. Edit the provided owl logo: remove only the white background outside the owl silhouette, including the white gap between its feet, and replace with genuine fully transparent alpha. Preserve the existing owl exactly: same neon green, black pixel outlines, pixelated shapes, composition and proportions, and preserve the white eye interiors as opaque white. Hard clean pixel edges, no white halo. No redesign, no added elements. Output transparent PNG.

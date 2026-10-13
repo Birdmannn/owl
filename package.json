@@ -1,0 +1,49 @@
+{
+  "name": "@owl/pilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Owl's Pilot: optimistic sessions for CKB applications",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "test": "tsx --test test/*.test.ts",
+    "demo": "tsx examples/game.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "ckb": "tsx scripts/ckb.ts",
+    "contracts:build": "bash scripts/build-contract.sh",
+    "contracts:test": "cd contracts && cargo test -p pilot-contract-tests",
+    "check:all": "npm run check && npm run contracts:build && npm run contracts:test",
+    "testnet:verify": "tsx scripts/verify-proof.ts",
+    "registry": "node --env-file-if-exists=.env --import tsx scripts/registry.ts",
+    "test:registry:postgres": "tsx --test test/registry-postgres.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/proper-lockfile": "^4.1.4",
+    "ethers": "^6.17.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@ckb-ccc/core": "^1.23.0",
+    "@ckb-ccc/spore": "^1.6.15",
+    "@noble/curves": "^2.4.0",
+    "pg": "^8.23.1",
+    "proper-lockfile": "^4.1.2"
+  }
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f7f2" />
+    <meta name="description" content="Pilot documentation. Bounded sessions and optimistic interactions for CKB applications." />
+    <link rel="icon" type="image/png" href="%BASE_URL%owl.png" />
+    <title>Pilot — Documentation</title>
+  </head>
+  <body>
+    <header class="header">
+      <a class="brand" href="#overview" aria-label="Pilot documentation home"><img src="%BASE_URL%owl.png" alt="" /><span>Pilot<span class="brand-dot">.</span></span><span class="docs-label">docs</span></a>
+      <div class="header-actions"><button class="search-trigger" aria-label="Search documentation"><span class="search-icon">⌕</span><span>Search documentation</span><kbd>⌘ K</kbd></button><a class="demo-link" data-demo target="_blank" rel="noopener">Open demo <span>↗</span></a><button class="menu-toggle" aria-label="Toggle navigation" aria-expanded="false">☰</button></div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar" aria-label="Documentation navigation">
+        <div class="version"><span class="status-dot"></span> v0.1.0 <span>TESTNET</span></div>
+        <nav id="navigation"></nav>
+        <a class="sidebar-demo" data-demo target="_blank" rel="noopener"><span class="tiny-label">TAKE IT FOR A SPIN</span><strong>Less waiting.<br />More flying. <span>↗</span></strong><span>Try the Pilot flight demo</span><div class="mini-flight"><span></span><img src="%BASE_URL%owl.png" alt="" /></div></a>
+        <div class="sidebar-footer">Built for CKB.<br /><span>Made to keep you moving.</span></div>
+      </aside>
+      <main id="main" tabindex="-1"></main>
+      <aside class="toc" aria-label="On this page"><span class="tiny-label">ON THIS PAGE</span><nav id="toc"></nav><div class="toc-note"><span class="status-dot"></span> A work in progress<p>These docs cover what’s implemented today.</p></div></aside>
+    </div>
+    <dialog id="search-dialog" aria-labelledby="search-title"><div class="search-top"><label id="search-title" for="search-input">Find your way</label><button id="close-search" aria-label="Close search">Esc</button></div><input id="search-input" type="search" placeholder="Search APIs, sessions, storage…" autocomplete="off" /><div id="search-results"></div></dialog>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
