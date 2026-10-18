@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import lockfile from 'proper-lockfile';
 import pg from 'pg';
+import { postgresPool, initializePostgres } from './postgres.js';
 import type { PilotUsername } from '../src/usernames.js';
 
 export interface Challenge { id: string; message: string; profile: PilotUsername; expiresAt: number }
@@ -68,9 +69,9 @@ export class JsonRegistryStore implements RegistryStore {
 }
 export class PostgresRegistryStore implements RegistryStore {
   private pool: pg.Pool;
-  constructor(url: string) { this.pool = new pg.Pool({ connectionString: url }); }
+  constructor(url: string) { this.pool = postgresPool(url); }
   async init() {
-    await this.pool.query(`CREATE TABLE IF NOT EXISTS pilot_usernames (
+    await initializePostgres(this.pool, `CREATE TABLE IF NOT EXISTS pilot_usernames (
       username TEXT PRIMARY KEY, owner_address TEXT NOT NULL UNIQUE,
       identity_key TEXT NOT NULL UNIQUE, profile JSONB NOT NULL);
       CREATE TABLE IF NOT EXISTS pilot_username_challenges (

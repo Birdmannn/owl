@@ -1,7 +1,23 @@
 {
-  "counter": null,
-  "delegation": null,
-  "status": "Contracts built; sponsored code cells must be deployed before enabling sponsorship. Existing v1 deployments remain unchanged.",
+  "counter": {
+    "network": "testnet",
+    "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+    "codeHash": "0x1142cb817ee90270fdfd065c642797446e5a6cbd1a35fdc999d06e9fe8dd27ec",
+    "outPoint": {
+      "txHash": "0x8c6f7c5d8217de1d8f644a53a2c7781b64a046b91180583c818b95e7e8fa7bbd",
+      "index": 0
+    }
+  },
+  "delegation": {
+    "network": "testnet",
+    "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+    "codeHash": "0xac21db568f72c93caa627b70ad978e518246ae1f99a7a18949eda1ba11860633",
+    "outPoint": {
+      "txHash": "0x8c6f7c5d8217de1d8f644a53a2c7781b64a046b91180583c818b95e7e8fa7bbd",
+      "index": 1
+    }
+  },
+  "status": "Sponsored code cells deployed; run the pool service and configure the demo URL to activate fee sponsorship.",
   "poolLock": {
     "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
     "hashType": "type",

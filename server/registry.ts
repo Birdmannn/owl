@@ -1,11 +1,12 @@
+import { readJson, MemoryRateLimiter, requestIp, type RateLimiter } from './http.js';
 import { verifyWalletIdentity } from '../src/wallet-identity.js';
 import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer, type RequestListener } from 'node:http';
 import { ccc } from '@ckb-ccc/core';
 import { normalizeUsername, type PilotNetwork, type PilotUsername } from '../src/usernames.js';
 import type { RegistryStore } from './registry-store.js';
 
-export interface RegistryOptions { store: RegistryStore; network: PilotNetwork; origin: string; allowedOrigins: string[] }
+export interface RegistryOptions { store: RegistryStore; network: PilotNetwork; origin: string; allowedOrigins: string[]; rateLimiter?: RateLimiter }
 /** Verify the signing identity controls the named CKB recipient. */
 export async function verifiedProfile(input: unknown, network: PilotNetwork): Promise<PilotUsername> {
   const value = input as Record<string, unknown>;
@@ -13,19 +14,10 @@ export async function verifiedProfile(input: unknown, network: PilotNetwork): Pr
   return { version: 2, username: normalizeUsername(value.username), ...await verifyWalletIdentity(input, network), createdAt: Date.now() };
 }
 
-async function body(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = []; let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 16_384) throw new Error('Request body is too large');
-    chunks.push(Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-}
-export function createRegistryServer(options: RegistryOptions) {
+export function createRegistryHandler(options: RegistryOptions): RequestListener {
   const { store, network, origin, allowedOrigins } = options;
-  const rates = new Map<string, { count: number; until: number }>();
-  return createServer(async (request, response) => {
+  const limiter = options.rateLimiter ?? new MemoryRateLimiter();
+  return async (request, response) => {
     response.setHeader('Content-Type', 'application/json');
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -51,12 +43,9 @@ export function createRegistryServer(options: RegistryOptions) {
       if (request.method !== 'POST' || !['/api/pilot/challenges', '/api/pilot/usernames'].includes(path)) {
         send(404, { error: 'Not found' }); return;
       }
-      const now = Date.now(), ip = request.socket.remoteAddress ?? 'unknown';
-      for (const [key, rate] of rates) if (rate.until <= now) rates.delete(key);
-      const rate = rates.get(ip) ?? { count: 0, until: now + 60_000 };
-      rates.set(ip, rate); if (++rate.count > 60) { send(429, { error: 'Too many registration requests; try again shortly' }); return; }
+      if (!await limiter.allow(`registry:${requestIp(request)}`, 60)) { send(429, { error: 'Too many registration requests; try again shortly' }); return; }
       if (!request.headers['content-type']?.startsWith('application/json')) throw new Error('Expected application/json');
-      const input = await body(request);
+      const input = await readJson(request, 16_384);
       if (path === '/api/pilot/challenges') {
         const profile = await verifiedProfile(input, network);
         if (await store.get(profile.username) || await store.byAddress(profile.ownerAddress)) {
@@ -95,5 +84,6 @@ export function createRegistryServer(options: RegistryOptions) {
       const expected = /Invalid|invalid|Use 3|Register with|Signing identity|wallet|Wallet|network|Network|expired|already|Expected|too large|Too many|This wallet/.test(message);
       send(expected ? /already/.test(message) ? 409 : 400 : 503, { error: expected ? message : 'Pilot username registry is unavailable; retry shortly' });
     }
-  });
+  };
 }
+export function createRegistryServer(options: RegistryOptions) { return createServer(createRegistryHandler(options)); }

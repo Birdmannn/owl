@@ -1,0 +1,5 @@
+{
+  "network": "ckb-testnet",
+  "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwxaxwdw93rrh6njjahaayxyhhga7ywmcg7ydk5a",
+  "purpose": "Deploy sponsored Pilot code cells; separate from the fee pool."
+}

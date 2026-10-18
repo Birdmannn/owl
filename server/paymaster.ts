@@ -1,4 +1,6 @@
-import { createServer } from 'node:http';
+import { createServer, type RequestListener } from 'node:http';
+import { PostgresJournal, postgresPool } from './postgres.js';
+import { readJson, MemoryRateLimiter, requestIp, type RateLimiter } from './http.js';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -8,15 +10,34 @@ import { inputCapacity, type SponsorQuote } from '../src/paymaster.js';
 import { assertPilotSigningOwner, verifyOwnerSignatureChanges } from '../src/ckb/owner.js';
 class Requote extends Error { constructor(readonly quoteId: ccc.Hex) { super('Requote unsigned request'); } }
 interface Record { quote: SponsorQuote; bytes?: ccc.Hex; day: string; owner: string }
-interface Data { version: 1; records: Record[] }
+export interface PaymasterData { version: 1; records: Record[] }
+export interface PaymasterStorage {
+  init(): Promise<void>;
+  exclusive<T>(operation: (data: PaymasterData) => Promise<T>): Promise<T>;
+}
+function validatePaymasterData(value: unknown): asserts value is PaymasterData {
+  const data = value as PaymasterData;
+  if (!data || data.version !== 1 || !Array.isArray(data.records)) throw new Error('Invalid paymaster journal');
+}
+export class PostgresPaymasterStore implements PaymasterStorage {
+  readonly pool; readonly journal;
+  constructor(url: string, poolLockHash: string) {
+    this.pool = postgresPool(url);
+    this.journal = new PostgresJournal(this.pool, `paymaster:ckb-testnet:${poolLockHash}`,
+      (): PaymasterData => ({ version: 1, records: [] }), validatePaymasterData);
+  }
+  init() { return this.journal.init(); }
+  exclusive<T>(operation: (data: PaymasterData) => Promise<T>) { return this.journal.exclusive(operation); }
+  close() { return this.pool.end(); }
+}
 /** Durable quotes, pool-input leases, spending caps, and retry bytes. Run one chain/network per file. */
 export class PaymasterStore {
   constructor(readonly file: string) {}
   async init() { await mkdir(dirname(this.file), { recursive: true }); try { await writeFile(this.file, JSON.stringify({ version: 1, records: [] }), { flag: 'wx', mode: 0o600 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; } }
-  async exclusive<T>(operation: (data: Data) => Promise<T>): Promise<T> {
+  async exclusive<T>(operation: (data: PaymasterData) => Promise<T>): Promise<T> {
     const release = await lockfile.lock(this.file, { realpath: false, retries: { retries: 30, minTimeout: 20, maxTimeout: 100 } });
     try {
-      const data = JSON.parse(await readFile(this.file, 'utf8')) as Data;
+      const data = JSON.parse(await readFile(this.file, 'utf8')) as PaymasterData;
       if (data.version !== 1 || !Array.isArray(data.records)) throw new Error('Invalid paymaster journal');
       const result = await operation(data), temp = this.file + '.' + randomUUID() + '.tmp';
       await writeFile(temp, JSON.stringify(data), { mode: 0o600 }); await rename(temp, this.file); return result;
@@ -24,7 +45,7 @@ export class PaymasterStore {
   }
 }
 export class PilotPaymaster {
-  private constructor(readonly options: { signer: ccc.Signer; store: PaymasterStore; maxFee: bigint; feeRate: bigint; dailyBudget: bigint; ownerDailyBudget: bigint; allowedCodeHashes: readonly ccc.Hex[]; allowOwnerTransactions?: boolean }, readonly pool: ccc.Script) {}
+  private constructor(readonly options: { signer: ccc.Signer; store: PaymasterStorage; maxFee: bigint; feeRate: bigint; dailyBudget: bigint; ownerDailyBudget: bigint; allowedCodeHashes: readonly ccc.Hex[]; allowOwnerTransactions?: boolean }, readonly pool: ccc.Script) {}
   static async create(options: PilotPaymaster['options']) {
     if (options.maxFee <= 0n || options.feeRate <= 0n || options.dailyBudget <= 0n || options.ownerDailyBudget <= 0n || !options.allowedCodeHashes.length) throw new Error('Configure paymaster limits and allowed application code hashes');
     const pool = (await options.signer.getRecommendedAddressObj()).script;
@@ -112,9 +133,10 @@ export class PilotPaymaster {
     return tx;
   }
 }
-export function createPaymasterServer(options: { paymaster: PilotPaymaster; allowedOrigins: readonly string[] }) {
-  const rates = new Map<string, { until: number; count: number }>();
-  return createServer(async (req, res) => {
+interface PaymasterHttpOptions { paymaster: PilotPaymaster; allowedOrigins: readonly string[]; rateLimiter?: RateLimiter }
+export function createPaymasterHandler(options: PaymasterHttpOptions): RequestListener {
+  const limiter = options.rateLimiter ?? new MemoryRateLimiter();
+  return async (req, res) => {
     res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (status: number, body: unknown) => { res.statusCode = status; res.end(JSON.stringify(body)); };
     const origin = req.headers.origin;
@@ -123,18 +145,15 @@ export function createPaymasterServer(options: { paymaster: PilotPaymaster; allo
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
     try {
-      const now = Date.now(), ip = req.socket.remoteAddress ?? 'unknown';
-      for (const [key, value] of rates) if (value.until < now) rates.delete(key);
-      const rate = rates.get(ip) ?? { until: now + 60_000, count: 0 }; rates.set(ip, rate);
-      if (++rate.count > 60) { send(429, { error: 'Rate limit exceeded' }); return; }
-      if (req.method === 'GET' && req.url === '/api/paymaster/status') { send(200, await options.paymaster.status()); return; }
-      if (req.method !== 'POST' || !['/api/paymaster/quote', '/api/paymaster/submit'].includes(req.url ?? '')) { send(404, { error: 'Not found' }); return; }
+      if (!await limiter.allow(`paymaster:${requestIp(req)}`, 60)) { send(429, { error: 'Rate limit exceeded' }); return; }
+      const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (req.method === 'GET' && path === '/api/paymaster/status') { send(200, await options.paymaster.status()); return; }
+      if (req.method !== 'POST' || !['/api/paymaster/quote', '/api/paymaster/submit'].includes(path)) { send(404, { error: 'Not found' }); return; }
       if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Expected JSON');
-      let size = 0; const chunks: Buffer[] = [];
-      for await (const chunk of req) { size += chunk.length; if (size > 262_144) throw new Error('Request too large'); chunks.push(Buffer.from(chunk)); }
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if (req.url === '/api/paymaster/quote') send(200, await options.paymaster.quote(body.bytes));
+      const body = await readJson(req, 262_144) as { bytes: ccc.Hex; quoteId: ccc.Hex };
+      if (path === '/api/paymaster/quote') send(200, await options.paymaster.quote(body.bytes));
       else send(200, { bytes: ccc.hexFrom((await options.paymaster.submit(body.quoteId, body.bytes)).toBytes()) });
     } catch (error) { if (error instanceof Requote) { send(409, { code: 'REQUOTE', quoteId: error.quoteId }); return; } send(400, { error: 'Sponsorship unavailable or rejected; no user-paid fallback. Retry the saved request, or contact the pool operator.' }); }
-  });
+  };
 }
+export function createPaymasterServer(options: PaymasterHttpOptions) { return createServer(createPaymasterHandler(options)); }

@@ -2,7 +2,7 @@
 
 The pool sponsors **CKB network transaction fees only**. The user still supplies recoverable cell capacity, transferred CKB/NFTs, and application payments. Sponsored user inputs equal user outputs exactly; pool input minus pool change pays the entire transaction fee.
 
-The service, SDK client, and new contract variants are implemented and tested. **Public activation is pending.** The configured receiving address had **0 CKB** on October 18, 2026. No sponsored deployment outpoints or pool secret were invented. Original public v1 sessions remain self-funded.
+The service, SDK client, and new contract variants are implemented and tested. **Both sponsored contract code cells are deployed and verified live on public testnet. Service/demo activation is still pending.** The configured receiving address was verified at **100,000 test CKB** on October 18, 2026. Verified deployment outpoints are saved in `deployments/pilot-sponsored.json`; the pool service still requires its matching operator key. Original public v1 sessions remain self-funded.
 
 ```mermaid
 sequenceDiagram
@@ -31,7 +31,7 @@ The optimistic engine still renders accepted actions immediately. A service fail
 ## Activate on testnet
 
 1. Build contracts with `npm run contracts:build`.
-2. Set server-only `PILOT_DEPLOYER_PRIVATE_KEY` to a funded testnet infrastructure account. Run `npm run paymaster:deploy -- both` (or `counter` / `delegation`). This deploys separate code cells and writes verified outpoints to `deployments/pilot-sponsored.json`. Code-cell occupied capacity is substantial; this infrastructure cost is paid by the deployer. Deployment saves exact signed bytes before broadcasting and retries its original transaction after interruption.
+2. Run `npm run paymaster:account` to create or reuse a new local testnet deployer. Its public address is saved to `deployments/sponsored-deployer.json`; its private key stays in git-ignored `.pilot/sponsored/deployer.json` with directory mode 700 and file mode 600. Fund that address with about **210,000 test CKB** for both current binaries (200,698 CKB of occupied capacity combined, plus fees and change). The deployment script reads this local account automatically. Alternatively, set server-only `PILOT_DEPLOYER_PRIVATE_KEY` to override it. This deployer is separate from the 100,000 CKB fee pool. Run `npm run paymaster:deploy -- both` (or `counter` / `delegation`). This deploys separate code cells and writes verified outpoints to `deployments/pilot-sponsored.json`. Code-cell occupied capacity is substantial; this infrastructure cost is paid by the deployer. Deployment saves exact signed bytes before broadcasting and retries its original transaction after interruption.
 3. Fund the receiving address in `deployments/owl-paymaster.json`. A normal cell occupies 61 CKB; it needs extra capacity above that to pay fees. Several funding cells support simultaneous transactions. One cell can fund only one pending transaction at a time.
 4. Set `PILOT_PAYMASTER_PRIVATE_KEY` on the **server** to the key that owns the pool address, then run `npm run paymaster`. The service rejects a key/address mismatch and non-testnet RPCs. This is an operator-controlled ordinary secp pool, not trustless escrow.
 5. Build the demo with `VITE_PILOT_PAYMASTER_URL=https://api.example/api/paymaster`. Keep `poolLock` in the deployment configuration pinned to that same pool. Authorize fresh sponsored sessions; legacy locks cannot be upgraded in place.
@@ -95,6 +95,12 @@ For reusable apps, use `policy.kind: 'delegation-sponsored-v1'`, its distinct de
 - Unsigned quotes do not lease cells. If an unsigned quote expires or loses its pool input, the service returns `409 REQUOTE`. Only this definitive response permits automatic adapters to discard the obsolete unsigned-pool transaction and prepare a new quote for the same action. Unknown errors retain exact bytes. Expired owner approvals need a fresh review/signature; do not discard an uncertain owner submission.
 - The pool must have spendable fee headroom and available cells, and the owner/global subsidy allowance must remain. A nonzero displayed balance alone is insufficient. Exhaustion, RPC failures, service failures, and stale quotes never enable a user-paid fallback.
 
-The docs pool-deposit form remains an explicit user-paid funding transfer with its fee displayed for review. Off-chain message actions have no CKB network fee. Mainnet activation, automatic refunds, pool management/consolidation, distributed database leasing, and sponsorship of arbitrary session transitions are not implemented.
+The docs pool-deposit form remains an explicit user-paid funding transfer with its fee displayed for review. Off-chain message actions have no CKB network fee. Mainnet activation, automatic refunds, pool management/consolidation, and sponsorship of arbitrary session transitions are not implemented.
 
 Validation: SDK/service accounting and retry tests, cryptographic pool signatures, independent CKB VM contract regressions, and existing browser/docs checks. No live sponsored testnet transaction has been executed by this change.
+
+## Vercel and PostgreSQL
+
+See [VERCEL.md](VERCEL.md) for the complete one-project demo/API deployment. `DATABASE_URL` now selects PostgreSQL paymaster storage and shared rate limiting for standalone services too. The Vercel adapter requires it, plus `PILOT_APP_ORIGIN` and the matching server-only pool key. It does not use local JSON or `/tmp` for settlement state. PostgreSQL serializes a pool journal with a row lock, commits exact signed bytes/leases/accounting before broadcast, and preserves retries across function instances. Use the same database for every instance sharing that pool. Existing JSON journals are not imported automatically; stop and migrate any active service before switching.
+
+The first PostgreSQL adapter stores the bounded journal as JSONB; it retains the existing caps and serializes paymaster RPC validation per pool. It does not add a background settlement worker. The configured function can run for sixty seconds, with shorter lock waits; interrupted requests retain the existing exact-request retry behavior. Hosting adaptation is implemented and tested locally; a live Vercel deployment and a live sponsored user transaction still require operator configuration and verification.

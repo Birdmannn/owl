@@ -16,3 +16,5 @@ data/pilot-social.json.*
 
 data/pilot-paymaster.json
 data/pilot-paymaster.json.*
+
+.vercel/

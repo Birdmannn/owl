@@ -96,3 +96,7 @@ Open Pilot and expand **Accounts in this browser** to see previously connected o
 See [PAYMASTER.md](../../PAYMASTER.md). Deploy the new sponsored code cells into `deployments/pilot-sponsored.json`, fund the configured pool with fee headroom, run `npm run paymaster` from the repo root with the matching pool key on the server, and set `VITE_PILOT_PAYMASTER_URL=https://api.example/api/paymaster` in this app’s `.env` before rebuilding. The key must never use a `VITE_` variable.
 
 When enabled, flight and cell-delegation sessions, owner setup/recovery/manual actions, and username transfers request pool-paid fees. Missing deployment, empty pool, exhausted allowance, or unavailable service never triggers a user-paid fallback. Existing legacy sessions need recovery and fresh sponsored authorization; do not reinterpret their lock arguments. Without the sponsorship URL, the existing demo retains its explicitly displayed user-paid fee mode. The separate docs pool-deposit form still pays its reviewed funding-transfer fee.
+
+## Vercel
+
+Deploy from the repository root using the committed `vercel.json`, rather than selecting this directory as the project root. The demo and all three APIs share one domain. See [VERCEL.md](../../VERCEL.md) for PostgreSQL, server-only pool key, public frontend URLs, origin configuration and live verification. New sponsored sessions require the deployed sponsored code cells and a working pool service.

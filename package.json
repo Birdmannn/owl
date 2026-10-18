@@ -30,7 +30,8 @@
     "test:registry:postgres": "tsx --test test/registry-postgres.test.ts",
     "social": "node --env-file-if-exists=.env --import tsx scripts/social.ts",
     "paymaster": "node --env-file-if-exists=.env --import tsx scripts/paymaster.ts",
-    "paymaster:deploy": "node --env-file-if-exists=.env --import tsx scripts/deploy-sponsored.ts"
+    "paymaster:deploy": "node --env-file-if-exists=.env --import tsx scripts/deploy-sponsored.ts",
+    "paymaster:account": "tsx scripts/create-deployer.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

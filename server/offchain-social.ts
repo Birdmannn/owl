@@ -1,4 +1,6 @@
-import { createServer } from 'node:http';
+import { createServer, type RequestListener } from 'node:http';
+import { PostgresJournal, postgresPool } from './postgres.js';
+import { readJson, MemoryRateLimiter, requestIp, type RateLimiter } from './http.js';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,6 +8,26 @@ import lockfile from 'proper-lockfile';
 import { acceptOffchainAction, acceptOffchainRevocation, type OffchainEnvelope, type OffchainRevocation, type OffchainAcceptanceStore } from '../src/offchain.js';
 import { socialManifest, emptySocialData, applySocialAction, applySocialRevocation, type SocialData, type SocialReceipt } from '../examples/offchain-social.js';
 
+export interface SocialStore extends OffchainAcceptanceStore<SocialReceipt> {
+  init(): Promise<void>;
+  read(): Promise<SocialData>;
+}
+function validateSocialData(value: unknown): asserts value is SocialData {
+  const data = value as SocialData;
+  if (!data || data.version !== 1 || !['likes', 'followers', 'posts', 'receipts', 'revoked'].every(key => Array.isArray((data as unknown as Record<string, unknown>)[key]))) throw new Error('Invalid social store; refusing to reset it');
+}
+export class PostgresSocialStore implements SocialStore {
+  readonly pool; readonly journal;
+  constructor(url: string, audience: string) {
+    this.pool = postgresPool(url);
+    this.journal = new PostgresJournal(this.pool, `social:owl.pilot.social-demo:${audience}`, emptySocialData, validateSocialData);
+  }
+  init() { return this.journal.init(); }
+  read() { return this.journal.read(); }
+  accept(envelope: OffchainEnvelope) { return this.journal.exclusive(data => applySocialAction(data, envelope)); }
+  async revoke(request: OffchainRevocation) { await this.journal.exclusive(data => applySocialRevocation(data, request)); }
+  close() { return this.pool.end(); }
+}
 /** Single-file demo backend. Lock + atomic rename keep mutation, replay checks, and revocation indivisible. */
 export class JsonSocialStore implements OffchainAcceptanceStore<SocialReceipt> {
   constructor(readonly file: string) {}
@@ -36,10 +58,11 @@ export class JsonSocialStore implements OffchainAcceptanceStore<SocialReceipt> {
   accept(envelope: OffchainEnvelope) { return this.mutate(data => applySocialAction(data, envelope)); }
   async revoke(request: OffchainRevocation) { await this.mutate(data => applySocialRevocation(data, request)); }
 }
-export function createSocialServer(options: { store: JsonSocialStore; audience: string }) {
+interface SocialHttpOptions { store: SocialStore; audience: string; rateLimiter?: RateLimiter }
+export function createSocialHandler(options: SocialHttpOptions): RequestListener {
   const manifest = socialManifest(options.audience);
-  const rates = new Map<string, { count: number; until: number }>();
-  return createServer(async (request, response) => {
+  const limiter = options.rateLimiter ?? new MemoryRateLimiter();
+  return async (request, response) => {
     response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (status: number, value: unknown) => { response.statusCode = status; response.end(JSON.stringify(value)); };
@@ -70,22 +93,18 @@ export function createSocialServer(options: { store: JsonSocialStore; audience: 
       }
       if (request.method === 'GET' && path === '/api/social/manifest') { send(200, manifest); return; }
       if (request.method !== 'POST' || !['/api/social/actions', '/api/social/revoke'].includes(path)) { send(404, { error: 'Not found' }); return; }
-      const now = Date.now();
-      for (const [ip, value] of rates) if (value.until <= now) rates.delete(ip);
-      const ip = request.socket.remoteAddress ?? 'unknown'; const rate = rates.get(ip) ?? { count: 0, until: now + 60_000 }; rates.set(ip, rate);
-      if (++rate.count > 120) { send(429, { error: 'Too many requests' }); return; }
+      if (!await limiter.allow(`social:${requestIp(request)}`, 120)) { send(429, { error: 'Too many requests' }); return; }
       if (!request.headers['content-type']?.startsWith('application/json')) throw new Error('Expected application/json');
-      const chunks: Buffer[] = []; let size = 0;
-      for await (const chunk of request) { size += chunk.length; if (size > 65_536) throw new Error('Request is too large'); chunks.push(Buffer.from(chunk)); }
-      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const input = await readJson(request, 65_536);
       if (path === '/api/social/actions') {
-        send(200, await acceptOffchainAction(input, { manifest, store: options.store })); return;
+        send(200, await acceptOffchainAction(input as OffchainEnvelope, { manifest, store: options.store })); return;
       }
-      await acceptOffchainRevocation(input, { manifest, store: options.store }); send(200, { revoked: true });
+      await acceptOffchainRevocation(input as OffchainRevocation, { manifest, store: options.store }); send(200, { revoked: true });
     } catch (error) {
       // Node I/O failures may include paths; never expose those to the browser.
       if (error && typeof error === 'object' && 'code' in error) { send(503, { error: 'Social storage unavailable' }); return; }
       send(400, { error: error instanceof Error ? error.message : 'Invalid social request' });
     }
-  });
+  };
 }
+export function createSocialServer(options: SocialHttpOptions) { return createServer(createSocialHandler(options)); }

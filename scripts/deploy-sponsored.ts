@@ -6,8 +6,14 @@ import { SPONSORED_COUNTER_CODE_HASH, SPONSORED_DELEGATION_CODE_HASH } from '../
 import { verifyDeployment, type Deployment } from '../src/ckb/counter.js';
 import poolConfiguration from '../deployments/owl-paymaster.json' with { type: 'json' };
 
-const secret = process.env.PILOT_DEPLOYER_PRIVATE_KEY;
-if (!secret) throw new Error('Set server-only PILOT_DEPLOYER_PRIVATE_KEY to the funded testnet deployer; no key is generated automatically.');
+let secret = process.env.PILOT_DEPLOYER_PRIVATE_KEY;
+if (!secret) {
+  let account: { version: number; network: string; privateKey: ccc.Hex };
+  try { account = JSON.parse(await readFile(resolve('.pilot/sponsored/deployer.json'), 'utf8')); }
+  catch { throw new Error('Run npm run paymaster:account and fund its testnet address, or set server-only PILOT_DEPLOYER_PRIVATE_KEY.'); }
+  if (account.version !== 1 || account.network !== 'ckb-testnet') throw new Error('Invalid local deployer account');
+  secret = account.privateKey;
+}
 const selected = process.argv[2] ?? 'both';
 if (!['counter', 'delegation', 'both'].includes(selected)) throw new Error('Use npm run paymaster:deploy -- counter|delegation|both');
 const client = new ccc.ClientPublicTestnet({ url: process.env.PILOT_PAYMASTER_RPC ?? 'https://testnet.ckb.dev' });

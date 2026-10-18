@@ -1,0 +1,263 @@
+# Pilot V2: developer projects and hosted SDK API
+
+**Status: proposal, not implemented.** This document specifies the next developer-facing layer. The APIs and SDK components below do not exist yet. It does not change the current integration or grant new signing authority.
+
+## Goal
+
+A developer creates a Pilot project, registers its app configuration and manifest, and integrates the SDK using a public project ID. Pilot operates username storage and hosted services. Developers manage their projects in a dashboard rather than editing Pilot's deployment environment variables.
+
+An optional server secret authenticates privileged developer operations and authorizes access to project-funded sponsorship. Developers never put this secret, the pool signing key, or database credentials in the browser.
+
+## What exists today
+
+- Existing-wallet connection, modal permission selection and session signing.
+- Compatible CKB session/delegation policies, with separate deployed testnet sponsored variants.
+- Username registration with verified wallet ownership and shared storage.
+- Paymaster quote/submission validation, fee limits and durable transaction retries.
+- Off-chain owner grants, session-signed actions, receiving-app verification, replay protection and revocation.
+- Vercel-compatible request handlers and PostgreSQL storage; standalone services can use JSON locally.
+
+Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, and `PilotProvider` are **new work proposed here**. The current React exports include `PilotModal` and `PilotAccountsProvider`; neither is the provider proposed below.
+
+## Credentials and authority
+
+| Value | Visibility | Purpose |
+| --- | --- | --- |
+| Project ID, e.g. `pilot_project_123` | Public; frontend-safe | Identifies app configuration, published manifest and API quota context |
+| Project secret, e.g. `pilot_sk_test_...` | Developer backend only | Authenticates scoped project management or sponsorship-token issuance |
+| Short-lived project access token | Browser-visible bearer token | Grants narrowly scoped hosted API access for a specific project/user/session |
+| Owner signature and session signatures | Sent as proofs | Establish wallet ownership, explicit delegation and authorization of actual actions |
+| Pool signing key | Pilot server environment only | Co-signs validated fee-sponsored transactions |
+
+The project ID is the publishable identifier for the first version. Calling it a publishable key would not make it a secret or stronger proof. A separate public API key is unnecessary initially.
+
+**A project credential never replaces wallet consent.** A developer secret cannot spend a user's funds, forge owner proofs, expand selected permissions, or bypass a contract's restrictions.
+
+It is impossible to guarantee that only the distributed SDK calls public HTTP endpoints. A caller can inspect browser traffic and reproduce SDK requests. Security comes from verification on the server and chain, not from hiding endpoint names, checking a User-Agent, or including a secret in frontend JavaScript.
+
+## Developer dashboard
+
+Proposed dashboard section: **Developer projects**.
+
+1. Authenticate the developer using a verified wallet ownership challenge. Use a dedicated admin session with expiry, secure cookies and CSRF protections; public project tokens are not dashboard sessions.
+2. Create a project with a name, app ID, exact HTTPS origins and initial testnet configuration.
+3. Publish a manifest and review its recognized script deployments, action names, rules, limits and content hash.
+4. Configure sponsorship mode, per-transaction caps, project/day and owner/day limits, and permitted actions.
+5. Create a scoped server secret if the app needs backend-authorized sponsorship or server-side management. Display the secret once.
+6. Copy the project ID and integration snippet. View usage, transaction receipts and project audit events.
+7. Rotate/revoke secrets, suspend sponsorship, or publish a new manifest version.
+
+Origin allowlists are browser controls and configuration checks; they are not proof that a caller is running the registered app. Project ownership must be checked on every dashboard mutation. Sensitive settings require recent authentication. Never expose pool keys through the dashboard.
+
+Initially, developer projects share Pilot's hosted infrastructure. Per-project quotas allocate an operator-controlled fee pool; a project is not a separate on-chain escrow or deposit account. Dedicated pools and billing are later work.
+
+## Proposed browser SDK
+
+The minimal frontend setup uses only the public project ID:
+
+```tsx
+// PROPOSED API — not currently exported.
+import { PilotProvider } from '@owl/pilot-react';
+import '@owl/pilot-react/styles.css';
+
+export function App() {
+  return (
+    <PilotProvider projectId="pilot_project_123">
+      <YourApp />
+    </PilotProvider>
+  );
+}
+```
+
+`PilotProvider` would:
+
+- Load public project configuration from Pilot's hosted API; support an explicit `apiUrl` override for self-hosting and local testing.
+- Expose the existing wallet/account/modal integration through one project context.
+- Resolve username, social and paymaster service URLs automatically.
+- Check the configured network, manifest hash, supported contract deployments and current app origin.
+- Obtain/refresh scoped hosted API access when needed and attach project context to requests.
+- Preserve owner-bound account switching, explicit permission selection, durable journals and exact-transaction retries.
+
+A project ID does not supply application transaction-building code. Developers still implement local builders/validators for their app transitions. Published configuration contains declarative rules and script identities, not executable JavaScript downloaded and trusted as signing authority. The SDK checks a local definition against its published manifest hash; the user reviews the actual actions before delegation.
+
+A corresponding non-React entry point is proposed:
+
+```ts
+// PROPOSED API — not currently exported.
+import { createPilotClient } from '@owl/pilot';
+
+const pilot = await createPilotClient({
+  projectId: 'pilot_project_123',
+  // apiUrl: 'https://your-pilot-host.example', // optional self-host override
+});
+```
+
+For a project whose backend authorizes sponsorship:
+
+```tsx
+// PROPOSED API — your backend authenticates the user before issuing a token.
+<PilotProvider
+  projectId="pilot_project_123"
+  getAccessToken={async ({ challenge }) => {
+    const response = await fetch('/api/pilot-access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challenge }),
+    });
+    if (!response.ok) throw new Error('Pilot access unavailable');
+    return (await response.json()).accessToken;
+  }}
+>
+  <YourApp />
+</PilotProvider>
+```
+
+The SDK supplies a Pilot-issued one-time challenge. The app backend authenticates its own user, verifies the requested owner/session binding and checks its app eligibility policy before using a server secret. It must not turn arbitrary browser input into sponsorship tokens. Tokens should remain in memory, outside URLs, analytics and diagnostic logs.
+
+## Proposed HTTP API
+
+These versioned endpoints are additive. They do not rename or silently secure the existing `/api/pilot`, `/api/paymaster`, or `/api/social` endpoints.
+
+| Endpoint | Authentication and behavior |
+| --- | --- |
+| `GET /api/v2/projects/:projectId/config` | Public, rate-limited app metadata, manifest/version/hash, network, service URLs and public limits; no credentials or private logs |
+| `POST /api/v2/projects/:projectId/challenges` | Public, rate-limited, one-time wallet access challenge bound to project, owner, session key, manifest and expiry |
+| `POST /api/v2/projects/:projectId/access` | Verify the challenge's wallet proof; issue a short-lived public-mode token within the project's allowed capabilities |
+| `POST /api/v2/projects/:projectId/tokens` | Scoped developer secret plus a valid owner/session challenge; issue backend-authorized access only within project policy |
+| `POST /api/v2/projects/:projectId/paymaster/quote` | Scoped access token, bound owner/session and allowed manifest/action; validate transaction and issue project-bound quote |
+| `POST /api/v2/projects/:projectId/paymaster/submit` | Same project/owner/session context; verify signatures, quote identity and budgets; commit exact bytes before broadcast |
+| `POST /api/v2/projects/:projectId/social/actions` | Scoped access plus the existing signed owner grant/action; verify registered audience/manifest and atomically accept/reject |
+| `POST /api/v2/projects/:projectId/social/revoke` | Verified owner revocation proof and appropriate access; revocation must remain available when sponsorship is disabled |
+| `GET /api/v2/projects/:projectId/usage` | Developer admin session or scoped reporting secret; project usage and public chain receipt references |
+| `GET /api/v2/projects/:projectId/logs` | Authorized project admin or owner-scoped access; redact credentials, session keys and sensitive payloads |
+| `POST /api/v2/developer/projects` | Authenticated dashboard admin; create an owned project |
+| `PATCH /api/v2/developer/projects/:projectId` | Owning admin or appropriately scoped management secret; update allowed settings |
+| `POST /api/v2/developer/projects/:projectId/manifests` | Owning admin or manifest-management secret; publish an immutable manifest version |
+| `POST /api/v2/developer/projects/:projectId/keys` | Owning admin with recent authentication; create a secret shown once |
+| `DELETE /api/v2/developer/projects/:projectId/keys/:keyId` | Owning admin with recent authentication; revoke the key |
+
+Privileged server requests use `Authorization: Bearer <project-secret>`. Browser requests use `Authorization: Bearer <short-lived-access-token>` where required. Distinct credential types and audiences prevent treating one as another. CORS must allow the required authorization header and only configured browser origins.
+
+Username resolution remains a **Pilot-wide namespace**, rather than one duplicate namespace per project. The SDK can supply project context for quotas and registration challenges, but username claims still require wallet ownership proofs and global uniqueness checks. Registering a name does not approve automatic signing. Recovery/renewal of proofs must never depend on presenting a developer secret in the browser.
+
+## Access and sponsorship modes
+
+### Public integration
+
+A project ID is sufficient to load public configuration and connect wallets. A wallet ownership proof can establish a short-lived project/user context. App developers do not need a backend simply to integrate Pilot.
+
+This proves the user controls a wallet, not that they are an eligible customer of the registered app. Such a token does not authorize privileged management or backend-only sponsorship. Public-mode social writes retain their signed-action and business-rule requirements.
+
+### Backend-authorized sponsorship
+
+For app-funded usage, the developer backend uses its secret to authorize a narrow access token after verifying its app user. Proposed token claims include:
+
+- Issuer, API audience, project ID, token ID, issue time and expiry; initial maximum lifetime five minutes.
+- Verified owner lock hash, network and authorized session public key where applicable.
+- Published manifest hash and allowed action IDs/capabilities.
+- Project credential/policy version for revocation checks.
+- Server-derived limits and optional origin binding as an extra browser check.
+
+Pilot signs access tokens with its own server credential, separate from the pool key. The token endpoint intersects requested capabilities with stored project policy. Client-supplied limits cannot raise the project allowance. Wallet proofs, signatures and transaction/script validation remain mandatory.
+
+An explicitly enabled public sponsorship mode may support frontend-only apps. It must use a separate bounded subsidy policy and quotas; a copied project ID or a fake Origin header cannot be prevented from attempting valid requests. Public sponsorship must not silently consume a developer's backend-only allowance.
+
+## Signing and settlement flow
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer dashboard
+    participant App as App and Pilot SDK
+    participant Wallet as Owner wallet
+    participant Backend as Developer backend (optional)
+    participant API as Hosted Pilot API
+    participant DB as PostgreSQL
+    participant Chain as CKB
+
+    Dev->>API: Create project, publish manifest and limits
+    API->>DB: Save project policy and credential digests
+    App->>API: Fetch config using public project ID
+    API-->>App: Published manifest/hash and service configuration
+    App->>Wallet: Review permissions and authorize session
+    Wallet-->>App: Explicit owner authorization
+    App->>API: Request one-time project/owner/session challenge
+    opt Backend-authorized sponsorship
+        App->>Backend: Request app access for challenge
+        Backend->>API: Authenticate with secret and authorize verified user
+        API-->>Backend: Short-lived scoped token
+        Backend-->>App: Token, never developer secret
+    end
+    App->>API: Quote transaction with project context and proofs
+    API->>DB: Check project, owner, pool limits and quote identity
+    API-->>App: Exact transaction quote
+    App->>App: Verify quote, sign allowed action and persist bytes
+    App->>API: Submit signed transaction and original quote
+    API->>Chain: Validate all scripts before exposing pool signature
+    API->>DB: Atomically commit signed bytes, pool lease and accounting
+    API->>Chain: Broadcast committed transaction bytes
+    API-->>App: Submitted transaction identity
+    Chain-->>App: Background chain confirmation
+```
+
+The existing optimistic engine still accepts prepared actions locally and renders immediately. A project token, quote or balance check does not mean chain confirmation or reserve funds several moves into the future. Backend errors retain the saved action for reconciliation; a definitive failure follows the existing rollback rules. Requoting must never change an unresolved signed transaction's identity without proof that it cannot settle.
+
+## PostgreSQL model and isolation
+
+Proposed additional tables:
+
+| Table | Required contents/invariants |
+| --- | --- |
+| `pilot_developers` and admin sessions | Verified developer ownership and expiring/revocable dashboard authentication |
+| `pilot_projects` | Owning developer, public project ID, app ID, network, status and credential/policy version |
+| `pilot_project_origins` | Exact permitted browser origins per project |
+| `pilot_project_manifests` | Immutable normalized manifest versions, content hashes and selected active version |
+| `pilot_project_keys` | Key ID/prefix, cryptographic digest, scopes, creation/expiry/revocation times; never raw secrets |
+| `pilot_project_challenges` | One-time project/owner/session proofs with purpose and expiry |
+| `pilot_project_policies` | Sponsorship mode, eligible actions and operator-approved fee/usage limits |
+| `pilot_project_usage` | Atomic project/day and project-owner/day accounting |
+| `pilot_project_audit` | Credential/settings changes and redacted action/transaction lifecycle events |
+
+Use cryptographically random, high-entropy secrets; store only digests and verify safely. Separate test credentials from any future mainnet credentials. New mainnet support needs explicit policy and deployment work; a key prefix must not enable it.
+
+Project IDs, issuer/audience and owner bindings must be checked server-side on every operation. Never trust a path parameter or request field to select data without checking the authenticated project and capability. Cross-project quote IDs, tokens, grants, logs and management requests must fail.
+
+Keep **pool-wide coordination** alongside project accounting. Two projects sharing a pool must not acquire independent leases for the same input or bypass the global daily limit. Quote identity must commit the project context as well as complete transaction bytes, including witnesses. Do not equate a raw CKB transaction hash with a unique project authorization.
+
+The existing PostgreSQL journal can be extended or normalized, but pool leases, exact bytes, owner/global/project budgets and retry identity must commit in one transaction before broadcast. An identical retry must not charge any budget twice. Existing signed retries must remain reconcilable after token expiry or policy/key rotation without permitting a new transaction or extra spending; recovery must authenticate the original owner/project and expose only the original authorized result.
+
+Username uniqueness remains global. Social state/replay domains must bind the registered app/audience and project association; adding a mutable project ID to an otherwise valid signed envelope is not sufficient. Bind new project-specific claims in a versioned signed format or an independently verified server-side authorization record. Existing off-chain grants need explicit compatibility handling rather than silently changing their signed content.
+
+## Manifest changes and revocation
+
+A developer's published manifest is configuration, not blanket user consent. Changes to actions, limits, scripts or manifest hash require a new version and fresh user review when they change authorization. Never silently expand a live grant.
+
+Project suspension or secret revocation blocks new hosted privileges and sponsorship according to policy. Existing short-lived tokens must be checked against current project/key status; expiry alone is insufficient for immediate suspension. Keep signed transaction recovery available under the original authority without creating a new spend.
+
+These controls do not revoke a copied on-chain session key. Existing contracts enforce their own lock arguments and rules; dashboard settings do not retroactively change them. Owner recovery remains the mechanism to revoke current on-chain delegation. Signed off-chain revocation follows its existing grant-specific verification path. Project authentication does not make arbitrary CKB contracts compatible with Pilot.
+
+## Implementation order
+
+1. Add project ownership/admin authentication, tables, immutable manifests, policy validation and scoped secret creation/rotation.
+2. Add public configuration and project challenge/token endpoints with wallet/session binding, expiry and suspension checks.
+3. Add project-aware hosted API authorization and atomic project-plus-pool accounting. Keep existing SDK signature/quote checks.
+4. Add `createPilotClient` and `PilotProvider`, retaining current explicit integration as a supported path during migration.
+5. Add dashboard creation/settings/usage/logs, then integrate the demo as a registered project.
+6. Update the web docs and installation examples only after these APIs are implemented and verified.
+
+During migration, protect the old unscoped sponsorship endpoints or disable them for the managed pool. They must not remain an alternate route around project limits. Unresolved old signed transactions require a documented recovery path; do not discard their journal entries. Moving endpoints must preserve username mappings, social replay/revocation state, pool leases and fee accounting.
+
+## Acceptance criteria
+
+- A developer can create a project, publish its manifest, copy the public ID and connect an app without handling Pilot's database or pool secret.
+- The public ID appears safely in frontend assets; developer secrets and pool credentials do not.
+- A copied ID cannot manage a project or obtain backend-only sponsorship without the required proofs and developer authorization.
+- Tokens, challenges and quotes reject a different project, owner, session key, manifest, audience or action.
+- SDK bypass, forged Origin headers and manually constructed HTTP requests cannot skip signature, business-rule, transaction or budget validation.
+- Concurrent instances/projects cannot double-lease pool inputs or overspend project/owner/global limits.
+- Exact retries after lost responses return original bytes/receipts and charge once, including after a cold start.
+- Expired/revoked credentials block new privileges while preserving authenticated recovery of already-signed transactions.
+- Dashboard users cannot read or modify another project's settings, secrets or private logs.
+- Permission expansion requires fresh consent; account switching cannot reuse another owner's token or session.
+- PostgreSQL failures fail closed, with no temporary-file fallback; local and Vercel integration tests cover authorization, concurrency and recovery.
+
+This is the intended V2 design. It does not claim the developer dashboard, credentials, tokens or proposed SDK exports are available in the current release.
