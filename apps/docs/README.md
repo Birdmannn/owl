@@ -16,7 +16,7 @@ VITE_DEMO_URL=https://your-demo.example npm run build --prefix apps/docs
 npm run preview --prefix apps/docs
 ```
 
-The site includes page navigation, section links, searchable docs (Cmd/Ctrl+K), copyable code blocks, and mobile navigation. Edit content in `src/content.js`. The app-integration quickstart is in `src/quickstart.js`: it uses `scripts/install-pilot.mjs` to clone, build, and install the SDK, React modal, and wallet connector automatically in an existing npm app, then covers wallet connection and app integration. No package publication is required.
+The site includes page navigation, section links, searchable docs (Cmd/Ctrl+K), copyable code blocks, and mobile navigation. Edit content in `src/content.js`. The app-integration quickstart is in `src/quickstart.js`: it uses `scripts/install-pilot.mjs` to clone, build, and install the SDK, React modal, and wallet connector automatically in an existing npm app, then covers wallet connection and app integration. No package publication is required. The `#cell-delegation` page in `src/delegation.js` covers developer-defined manifests, builders, selected-cell authorization, manual actions, and recovery; the implementation record is [CELL_DELEGATION.md](../../CELL_DELEGATION.md).
 
 ## Owl Paymaster
 
@@ -36,6 +36,8 @@ The current counter contract cannot take a paymaster input: it restricts moves t
 
 ## Pilot Board
 
-The separate `#board` page queries the public CKB testnet indexer for the lock code hash in `deployments/testnet.json`. It paginates across users, checks committed receipts, the session-signature witness, and the matching input and output locks. Owner-signed authorization/recovery transactions are excluded. Fees come from the actual input/output capacity difference; timestamps come from block headers. Metrics reflect loaded transactions, with hash/session/move/block filtering and explorer links.
+The `#board` page indexes both known Pilot lock policies across apps and owners on CKB testnet, including setup, delegated actions, owner transitions, and recovery. Records expand to show full details. Source filters and search cover chain receipts, shared off-chain receipts, and every available same-origin account journal entry. Load older activity to paginate public history; fees count loaded chain transactions once.
 
-Queued or unbroadcast transactions remain in the demo's local inspector; they cannot be read across browser origins. Indexer errors produce a retryable error state rather than fabricated or cached transaction history.
+Set `VITE_PILOT_SOCIAL_URL=https://api.example/api/social` before building or serving the docs to include the shared social verifier’s public paginated receipt history. The backend must include `GET /api/social/receipts`; this public read endpoint supports cross-origin access without changing mutation origin restrictions. Receipt payloads are public and backend-reported acceptance is labeled separately from chain confirmation.
+
+Private journals on another origin or device and legacy inspector-only logs cannot be queried by this site. Local records are never uploaded. Missing receipts or unavailable public sources produce retryable errors while retaining available history. Unknown app actions appear by their on-chain action/manifest hashes; custom lock code hashes require a Board catalog entry.

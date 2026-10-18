@@ -1,0 +1,101 @@
+import { test, expect } from '@playwright/test';
+import { ccc } from '@ckb-ccc/core';
+import { injectWallet } from './wallet-fixture';
+
+test('social session signs likes and posts without owner prompts, restores, and revokes', async ({ page, context }) => {
+  const wallet = await injectWallet(context); await page.goto('/');
+  const panel = page.getByRole('region', { name: 'Off-chain social demo' });
+  await expect(panel.getByText('BROWSER-LOCAL DEMO', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Enable social signing' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Sign social actions on my behalf' });
+  await dialog.getByRole('button', { name: 'Connect owner wallet for social demo' }).click();
+  await page.getByText('Pilot Test Wallet', { exact: true }).click();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(3);
+  await expect(dialog.getByRole('checkbox', { name: /Like posts/ })).not.toBeChecked();
+  await expect(dialog.getByRole('button', { name: 'Approve selected off-chain actions' })).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: /Like posts/ }).check();
+  await dialog.getByRole('checkbox', { name: /Publish posts/ }).check();
+  await dialog.getByRole('button', { name: 'Approve selected off-chain actions' }).click();
+  await expect(dialog).not.toBeVisible(); expect(wallet.messageSignatures).toBe(1);
+  await expect(panel.getByRole('button', { name: 'Follow Owl · 0' })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Like · 0', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Unlike · 1', exact: true })).toBeEnabled();
+  await panel.getByRole('textbox', { name: 'Your post' }).fill('A signed hello from Pilot');
+  await panel.getByRole('button', { name: 'Publish signed post' }).click();
+  await expect(panel.getByRole('listitem').getByText('A signed hello from Pilot', { exact: true })).toBeVisible();
+  expect(wallet.messageSignatures).toBe(1);
+  await panel.getByRole('button', { name: 'Social profile & logs' }).click();
+  const profile = page.getByRole('dialog', { name: 'Your Pilot social profile' });
+  await profile.getByText('Activity & logs (2)', { exact: true }).click();
+  await expect(profile.getByText('Accepted by app', { exact: false })).toHaveCount(2);
+  const likeRecord = profile.locator('.pilot-action-history > ol > li').filter({ hasText: 'Like posts' });
+  await likeRecord.locator('summary').click();
+  await expect(likeRecord.getByText('Session-signed message saved before submission.', { exact: false })).toBeVisible();
+  await expect(likeRecord.getByText('Receiving app verified and accepted the signed action; no chain transaction.', { exact: false })).toBeVisible();
+  await expect(profile.locator('.pilot-action-history')).not.toContainText('privateKey');
+  await profile.getByRole('button', { name: 'Return to app' }).click();
+  await page.reload();
+  await expect(panel.getByRole('button', { name: 'Unlike · 1', exact: true })).toBeEnabled();
+  await panel.getByRole('button', { name: 'Unlike · 1', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Like · 0', exact: true })).toBeEnabled();
+  expect(wallet.messageSignatures).toBe(1);
+  await panel.getByRole('button', { name: 'Social profile & logs' }).click();
+  await page.getByRole('dialog', { name: 'Your Pilot social profile' }).getByText('Activity & logs (3)', { exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Your Pilot social profile' }).locator('.pilot-action-history > ol > li')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Return to app' }).click();
+  await panel.getByText('Signed messages, permissions, and verification logs', { exact: true }).click();
+  await expect(panel.locator('pre')).toContainText('sessionPublicKey');
+  await expect(panel.locator('pre')).not.toContainText('privateKey');
+  const downloadEvent = page.waitForEvent('download');
+  await panel.getByRole('button', { name: 'Export social diagnostics' }).click();
+  const download = await downloadEvent; expect(download.suggestedFilename()).toBe('pilot-social-diagnostics.json');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await panel.getByRole('button', { name: 'Revoke social session · owner signature' }).click();
+  await expect(panel.getByRole('button', { name: 'Enable social signing' })).toBeEnabled();
+  expect(wallet.messageSignatures).toBe(2);
+  const saved = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('pilot:social:session:') && !key.endsWith(':logs') && !key.endsWith(':work')));
+  expect(saved).toEqual([]);
+});
+
+test('declining off-chain permissions creates no session or wallet signature', async ({ page, context }) => {
+  const wallet = await injectWallet(context); await page.goto('/');
+  await page.getByRole('button', { name: 'Enable social signing' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Sign social actions on my behalf' });
+  await dialog.getByRole('button', { name: 'Connect owner wallet for social demo' }).click();
+  await page.getByText('Pilot Test Wallet', { exact: true }).click();
+  await dialog.getByRole('button', { name: 'Continue without automatic signing' }).click();
+  expect(wallet.messageSignatures).toBe(0);
+  await expect(page.getByRole('button', { name: 'Like · 0', exact: true })).toBeDisabled();
+});
+
+test('a different owner’s valid saved grant cannot activate signing or appear in profile history', async ({ page, context }) => {
+  await injectWallet(context); await page.goto('/');
+  const panel = page.getByRole('region', { name: 'Off-chain social demo' });
+  await panel.getByRole('button', { name: 'Enable social signing' }).click();
+  await page.getByRole('button', { name: 'Connect owner wallet for social demo' }).click();
+  await page.getByText('Pilot Test Wallet', { exact: true }).click();
+  await page.getByRole('button', { name: 'Continue without automatic signing' }).click();
+  const address = (await page.getByRole('button', { name: 'Copy CKB address' }).getAttribute('title'))!;
+  const { secp256k1 } = await import('@noble/curves/secp256k1.js');
+  const { authorizeOffchain } = await import('../../../src/offchain');
+  const { socialManifest } = await import('../../../examples/offchain-social');
+  const owner = new ccc.SignerCkbPrivateKey(new ccc.ClientPublicTestnet(), `0x${'44'.repeat(32)}`);
+  const privateKey = `0x${'55'.repeat(32)}` as ccc.Hex;
+  const origin = new URL(page.url()).origin;
+  const authorization = await authorizeOffchain(owner, socialManifest(origin), { selected: ['social.like'],
+    sessionPublicKey: ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(privateKey), true)), expiresAt: Date.now() + 60_000 });
+  await page.evaluate(({ address, authorization, privateKey }) => {
+    localStorage.setItem('pilot:social:session:' + location.origin + ':' + address, JSON.stringify({ authorization, privateKey }));
+    localStorage.setItem('pilot:account-activity:v1:' + address, JSON.stringify([{ id: 'foreign', ownerAddress: authorization.grant.owner.ownerAddress,
+      appId: 'foreign', sessionId: 'foreign', actionId: 'steal', name: 'FOREIGN WALLET ACTION', kind: 'offchain', status: 'accepted', createdAt: Date.now(), updatedAt: Date.now(), logs: [] }]));
+  }, { address, authorization, privateKey });
+  await page.reload();
+  await expect(panel.getByText('Saved social session belongs to another wallet', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Like · 0', exact: true })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Social profile & logs' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Sign social actions on my behalf' });
+  await dialog.getByText('Activity & logs (0)', { exact: true }).click();
+  await expect(dialog.getByText('No actions recorded for this wallet yet.', { exact: true })).toBeVisible();
+  await expect(dialog).not.toContainText('FOREIGN WALLET ACTION');
+});

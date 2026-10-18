@@ -1,15 +1,17 @@
+import { readFileSync, existsSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ccc } from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { counterLock, encodeCounterData, decodeCounterData, signCounterTransaction,
-  CkbCounterAdapter } from '../src/index.js';
+  CkbCounterAdapter, COUNTER_V1_CODE_HASH } from '../src/index.js';
 import type { Deployment, Session, SettlementJournal } from '../src/index.js';
 const key = ccc.hexFrom(new Uint8Array(32).fill(1));
 const genesisHash = '0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606';
-const code = new Uint8Array([1, 2, 3]);
+const hasCode = existsSync('contracts/build/pilot-session-lock');
+const code = hasCode ? readFileSync('contracts/build/pilot-session-lock') : new Uint8Array([1, 2, 3]);
 const outPoint = { txHash: ccc.hexFrom(new Uint8Array(32).fill(2)), index: 0 };
-const deployment: Deployment = { network: 'testnet', genesisHash, codeHash: ccc.hashCkb(code), outPoint };
+const deployment: Deployment = { network: 'testnet', genesisHash, codeHash: COUNTER_V1_CODE_HASH, outPoint };
 const owner = ccc.Script.from({ codeHash: ccc.hexFrom(new Uint8Array(32).fill(3)), hashType: 'data2', args: '0x' });
 const lock = counterLock(deployment, owner, ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(key), true)), 1000n, 15_000_000_000n);
 const cell = { lock, outPoint: { txHash: ccc.hexFrom(new Uint8Array(32).fill(4)), index: 0 }, feePerMove: '1000' };
@@ -27,9 +29,9 @@ test('counter encoding preserves u64 amounts and signatures bind exact transacti
   assert.equal(secp256k1.verify(witness.slice(1), ccc.bytesFrom(tx.hash()), publicKey, { prehash: false }), false);
 });
 
-test('adapter persists signed bytes before broadcast and reconciles after restart', async () => {
+test('adapter persists signed bytes before broadcast and reconciles after restart', { skip: !hasCode && 'Build the contracts first' }, async () => {
   let saved: SettlementJournal | undefined;
-  let fail = true;
+  let fail = true; let reorg = false;
   const sent: string[] = [];
   const phases: string[] = [];
   const store = { async load() { return structuredClone(saved); }, async save(value: SettlementJournal) { saved = structuredClone(value); } };
@@ -39,7 +41,7 @@ test('adapter persists signed bytes before broadcast and reconciles after restar
       if (ccc.OutPoint.from(point).eq(deployment.outPoint)) return ccc.Cell.from({ outPoint, cellOutput: { lock: owner }, outputData: code });
       return ccc.Cell.from({ outPoint: point, cellOutput: { lock, capacity: 15_000_003_000n }, outputData: encodeCounterData(3000n, 0n) });
     },
-    async getTransactionNoCache() { return undefined; },
+    async getTransactionNoCache(hash: ccc.HexLike) { const record = Object.values(saved?.transactions ?? {}).find(tx => tx.hash === hash); return !reorg && record?.confirmed ? { status: 'committed', transaction: ccc.Transaction.fromBytes(record.bytes) } : undefined; },
     async sendTransaction(tx: ccc.Transaction) {
       assert.ok(saved?.transactions['move-1']);
       sent.push(ccc.hexFrom(tx.toBytes()));
@@ -61,6 +63,14 @@ test('adapter persists signed bytes before broadcast and reconciles after restar
   await restored.settle(request);
   assert.equal(sent.length, 2);
   assert.deepEqual(phases, ['signed', 'checking', 'broadcasting', 'checking', 'broadcasting', 'submitted', 'confirming', 'confirmed']);
+  reorg = true;
+  await assert.rejects(restored.settle(request), /not confirmed by the node/);
+  await assert.rejects(CkbCounterAdapter.create({ ...options, session: { ...session, id: 'another-account-session' } }), /another counter session/);
+  saved!.scopeHash = undefined; // Legacy journal migration still validates signatures/effects.
+  const altered = ccc.Transaction.fromBytes(saved!.transactions['move-1']!.bytes);
+  altered.outputs[0]!.lock = owner.clone();
+  saved!.transactions['move-1']!.bytes = ccc.hexFrom(altered.toBytes()); saved!.transactions['move-1']!.hash = altered.hash();
+  await assert.rejects(CkbCounterAdapter.create(options), /outside the approved session/);
 });
 
 test('adapter rejects a deployment on another chain before signing', async () => {

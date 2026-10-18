@@ -1,3 +1,4 @@
+import { recordPilotActivity } from '@owl/pilot';
 import { ccc } from '@ckb-ccc/core';
 import type { CounterTransactionEvent, Journal, CounterState, CounterAction, PilotEvent, SettlementJournal } from '@owl/pilot';
 export type Status = 'queued' | 'signing' | 'signed' | 'checking' | 'broadcasting' | 'submitted' | 'confirming' | 'confirmed' | 'retry' | 'reverted' | 'failed';
@@ -17,6 +18,10 @@ export function updateActivity(key: string, id: string, patch: Partial<Activity>
     else Object.assign(row, patch);
     if (entry) { row.logs.push({ ...entry, at: Date.now() }); row.updatedAt = Date.now(); row.createdAt ??= row.updatedAt; }
     cache.set(key, rows);
+    try { recordPilotActivity(localStorage, { id: row.id, ownerAddress: key.slice(key.lastIndexOf(':') + 1), appId: 'owl.flight.demo', sessionId: row.sessionId,
+      actionId: row.kind === 'move' ? 'counter.increment' : row.kind, name: row.title, kind: row.kind === 'move' ? 'onchain' : 'owner',
+      status: row.status, createdAt: row.createdAt, transactionHash: row.hash, fee: row.actualFee ?? row.cost, logs: row.logs.map(({at,phase,message,error})=>({at,phase,message:message+(error?' '+error.message:'')})) }); } catch { /* Diagnostics cannot block settlement. */ }
+
     try { localStorage.setItem(activityKey(key), JSON.stringify(rows)); } catch { console.warn('Pilot transaction logs could not be saved.'); }
     window.dispatchEvent(new CustomEvent('pilot-activity', { detail: key }));
   } catch { /* Diagnostics must never interrupt durable action acceptance. */ }
@@ -40,9 +45,11 @@ export function transactionObserver(key: string, id: string, base: Partial<Activ
     const previous = readActivity(key).find(row => row.id === actualId);
     const patch: Partial<Activity> = { ...base, status: event.phase };
     if (previous?.status === 'confirmed') patch.status = 'confirmed';
+    if (event.networkFee) patch.actualFee = event.networkFee;
     if (event.transactionHash) patch.hash = event.transactionHash;
     if (event.transactionBytes) patch.bytes = event.transactionBytes;
-    updateActivity(key, actualId, patch, { phase: event.phase, message: messages[event.phase] });
+    const message = event.phase === 'signed' && base.kind && base.kind !== 'move' ? 'Owner wallet signed this transaction. Exact signed bytes are available in this diagnostic record.' : messages[event.phase];
+    updateActivity(key, actualId, patch, { phase: event.phase, message: message + (event.feePayer === 'pool' ? ` Pool pays ${event.networkFee ?? 'the quoted'} shannons network fee; user network fee is zero. Action allowance is a separate virtual reservation.` : '') });
   };
 }
 export function recordQueue(key: string, journal: Journal<CounterState, CounterAction>, recovered = false) {

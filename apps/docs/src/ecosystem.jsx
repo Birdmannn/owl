@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ccc } from '@ckb-ccc/connector-react';
-import { amount, buildDeposit, client, explorer, getRecipient, loadBoardPage, paymasterAddress, short } from './chain.js';
+import { amount, buildDeposit, client, explorer, getRecipient, loadBoardPage, loadSocialBoardPage, readLocalBoardActivity, socialBoardUrl, paymasterAddress, short } from './chain.js';
 
 const message = (e) => e instanceof Error ? e.message : String(e);
 const receiptKey = 'pilot:paymaster:deposits:v1';
@@ -94,13 +94,13 @@ function Paymaster() {
   };
   return <>
     <div className="ecosystem-banner"><div><span className="tiny-label">OWL PAYMASTER / CKB TESTNET</span><h2>Give every pilot<br />room to fly.</h2><p>A shared pool for transaction fees.<br />Fund the next flight, together.</p></div><div className="pool-symbol">✦<span>POWERED BY THE FLOCK</span></div></div>
-    <div className="metric-grid"><div><span>Paymaster balance</span><strong>{pool ?? '—'} <small>CKB</small></strong></div><div><span>Network</span><strong>Testnet <i className="status-dot" /></strong></div><div><span>Fee sponsorship</span><strong className="metric-small">In development</strong></div></div>
+    <div className="metric-grid"><div><span>Paymaster balance</span><strong>{pool ?? '—'} <small>CKB</small></strong></div><div><span>Network</span><strong>Testnet <i className="status-dot" /></strong></div><div><span>Fee sponsorship</span><strong className="metric-small">Activation pending</strong></div></div>
     <div className="deposit-panel"><div className="panel-heading"><div><span className="tiny-label">FUND THE POOL</span><h2>Deposit into Owl paymaster</h2></div><span className="network-badge">TEST CKB ONLY</span></div>
-      <p>Your wallet signs a transfer into Owl’s paymaster address. Fees for sponsored user transactions would be paid from this pool.</p>
+      <p>Your wallet signs a transfer into Owl’s paymaster address. Once activated, this pool pays network fees for eligible Pilot transactions.</p>
       <div className="address-box"><span>Paymaster address</span>{paymasterAddress ? <><code>{paymasterAddress}</code><button type="button" onClick={(e) => { const b = e.currentTarget; navigator.clipboard.writeText(paymasterAddress).then(() => { b.textContent = 'Copied ✓'; }).catch(() => setError('Select the address to copy it.')); }}>Copy address</button></> : <p>Owl’s paymaster address hasn’t been published yet.</p>}</div>
       <form onSubmit={prepare}><label htmlFor="deposit-amount">Deposit amount</label><div className="amount-input"><input id="deposit-amount" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} disabled={!!busy || pending} autoComplete="off" /><span>CKB</span></div><div className="amount-options">{['100', '250', '1000'].map((n) => <button type="button" key={n} disabled={!!busy || pending} className={value === n ? 'selected' : ''} onClick={() => setValue(n)}>{n} CKB</button>)}</div><p className="form-note">{minimum ? `Minimum deposit: ${minimum} CKB to create a cell. The wallet also pays the transfer fee.` : 'The minimum deposit depends on the receiving lock’s cell capacity.'}</p>
       {!signer ? <button type="button" className="ecosystem-primary" onClick={() => open()}>Connect wallet <span>↗</span></button> : <><button className="ecosystem-primary" type="submit" disabled={!paymasterAddress || !!busy || pending}>{busy || (pending ? 'Deposit awaiting confirmation' : 'Review deposit')} <span>→</span></button><button type="button" className="wallet-disconnect" disabled={!!busy} onClick={() => disconnect()}>{address ? short(address) : 'Wallet connected'} · Disconnect</button></>}
-      </form><div className="sponsorship-note"><span>↳</span><p><strong>Deposits fund the address. Sponsorship is the next step.</strong>The current counter adapter does not spend paymaster funds. Depositing here does not yet make demo transactions fee-free, and no automatic refund is implemented.</p></div>
+      </form><div className="sponsorship-note"><span>↳</span><p><strong>Deposits fund the address. Sponsorship requires activation.</strong>Sponsored adapters and the pool service are implemented. New contract deployments, pool-key configuration, and a running service are required; this receiving address alone does not make the public demo fee-free. No automatic refund is implemented.</p></div>
     </div>
     {error && <div className="app-message error" role="alert">{error}</div>}
     <section className="deposit-history"><div className="panel-heading"><h2>Your deposit receipts</h2><button type="button" className="outline-button" disabled={!!busy} onClick={checkReceipts}>{busy || 'Refresh ↻'}</button></div><p>Transfers made from this browser. Confirmation is checked against CKB testnet.</p>{deposits.length ? <div className="table-wrap"><table><thead><tr><th>Amount</th><th>Status</th><th>Receipt</th></tr></thead><tbody>{deposits.map((r) => <tr key={r.hash}><td>{r.amount} CKB</td><td><span className={`tx-status ${r.status}`}>{r.status}</span>{(r.status === 'signed' || r.status === 'submitted') && r.bytes && <button className="outline-button" disabled={!!busy} onClick={() => retryDeposit(r)}>Retry saved deposit</button>}</td><td><a href={explorer(r.hash)} target="_blank" rel="noopener">{short(r.hash)} ↗</a></td></tr>)}</tbody></table></div> : <div className="app-empty"><span>＋</span><strong>Your first contribution starts here.</strong><p>Deposit receipts will appear after you sign a transfer.</p></div>}</section>
@@ -109,37 +109,58 @@ function Paymaster() {
 }
 
 function Board() {
-  const [rows, setRows] = useState([]);
-  const [cursor, setCursor] = useState(undefined);
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [query, setQuery] = useState('');
+  const [rows, setRows] = useState([]), [local, setLocal] = useState([]);
+  const [cursor, setCursor] = useState({ chain: undefined, social: undefined });
+  const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false);
+  const [error, setError] = useState(''), [query, setQuery] = useState(''), [source, setSource] = useState('all');
   const [updated, setUpdated] = useState(null);
-  const active = useRef(true);
-  const locked = useRef(false);
-  const load = async (reset = false) => {
-    if (locked.current) return; locked.current = true; setBusy(true); setError('');
-    try {
-      const result = await loadBoardPage(reset ? undefined : cursor);
-      if (!active.current) return;
-      setRows((old) => [...new Map([...(reset ? [] : old), ...result.rows].map((r) => [r.hash, r])).values()]);
-      setCursor(result.cursor); setLoaded(true); setUpdated(new Date());
-    } catch (e) { if (active.current) setError(message(e)); }
-    finally { locked.current = false; if (active.current) setBusy(false); }
+  const active = useRef(true), locked = useRef(false);
+  const refreshLocal = () => {
+    try { setLocal(readLocalBoardActivity(window.localStorage)); }
+    catch { setError(previous => previous || 'Browser activity storage is unavailable.'); }
   };
-  useEffect(() => { active.current = true; void load(true); return () => { active.current = false; }; }, []);
-  const visible = rows.filter((r) => `${r.hash} ${r.block} ${r.session} ${r.position}`.toLowerCase().includes(query.toLowerCase().trim()));
-  const fees = rows.reduce((sum, r) => sum + BigInt(r.fee), 0n);
+  const load = async (reset = false) => {
+    if (locked.current) return;
+    locked.current = true; setBusy(true); setError(''); refreshLocal();
+    const sources = ['chain', 'social'];
+    try {
+      const results = await Promise.allSettled([loadBoardPage(reset ? undefined : cursor.chain), loadSocialBoardPage(reset ? undefined : cursor.social)]);
+      if (!active.current) return;
+      const successful = sources.filter((_, i) => results[i].status === 'fulfilled');
+      const incoming = results.flatMap(result => result.status === 'fulfilled' ? result.value.rows : []);
+      setRows(old => [...new Map([...old.filter(row => !reset || !successful.includes(row.source)), ...incoming].map(row => [row.id, row])).values()]);
+      setCursor(old => Object.fromEntries(sources.map((name, i) => [name, results[i].status === 'fulfilled' ? results[i].value.cursor : old[name]])));
+      setError(results.flatMap((result, i) => result.status === 'rejected' ? [`${sources[i]}: ${message(result.reason)}`] : []).join(' '));
+      setLoaded(true); setUpdated(new Date());
+    } finally { locked.current = false; if (active.current) setBusy(false); }
+  };
+  useEffect(() => {
+    active.current = true; void load(true);
+    window.addEventListener('storage', refreshLocal); window.addEventListener('pilot-account-activity', refreshLocal);
+    return () => { active.current = false; window.removeEventListener('storage', refreshLocal); window.removeEventListener('pilot-account-activity', refreshLocal); };
+  }, []);
+  const all = [...rows, ...local].sort((a, b) => b.time - a.time || a.id.localeCompare(b.id));
+  const visible = all.filter(row => (source === 'all' || row.source === source) &&
+    [row.hash, row.block, row.session, row.owner, row.app, row.action, row.actionId, row.status, row.target, ...(row.details.logs || []).map(log => log.message)].join(' ').toLowerCase().includes(query.trim().toLowerCase()));
+  const chain = rows.filter(row => row.source === 'chain');
+  const fees = chain.reduce((sum, row) => sum + BigInt(row.fee), 0n);
   return <>
-    <div className="ecosystem-banner board-banner"><div><span className="tiny-label">PILOT BOARD / ON-CHAIN ACTIVITY</span><h2>Every signature.<br />A flight recorded.</h2><p>Real transactions. Public receipts.<br />See the work your pilot takes on.</p></div><div className="board-symbol"><span>01 ━━━ ✦</span><span>02 ━━━ ✦</span><span>03 ━━━ ✦</span></div></div>
-    <div className="metric-grid"><div><span>Signed transactions loaded</span><strong>{loaded ? rows.length : '—'}</strong></div><div><span>Session keys in this view</span><strong>{loaded ? new Set(rows.map((r) => r.session)).size : '—'}</strong></div><div><span>Fees paid in this view</span><strong>{loaded ? amount(fees) : '—'} <small>CKB</small></strong></div></div>
-    <div className="board-toolbar"><div><h2>Transaction history</h2><p><i className="status-dot" /> CKB testnet · confirmed session-key signatures</p></div><button className="outline-button" disabled={busy} onClick={() => load(true)}>{busy ? 'Loading…' : 'Refresh ↻'}</button></div>
-    <label className="board-search"><span>⌕</span><input type="search" aria-label="Filter transactions" placeholder="Filter by hash, session key, move, or block…" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-    {error && <div className="app-message error" role="alert">{error}<button className="outline-button" disabled={busy} onClick={() => load(!loaded)}>Retry</button></div>}
-    {visible.length ? <div className="table-wrap board-table"><table><thead><tr><th>Transaction</th><th>Action</th><th>Signer</th><th>Fee</th><th>Block / time</th></tr></thead><tbody>{visible.map((r) => <tr key={r.hash}><td><a href={explorer(r.hash)} target="_blank" rel="noopener"><code>{short(r.hash)}</code> ↗</a><span className="tx-status confirmed">Confirmed</span></td><td><strong>Forward move</strong><small>Position {r.position}</small></td><td><span className="signer-label">Pilot session key</span><code title={r.session}>{short(r.session)}</code></td><td>{amount(r.fee)}<small>CKB</small></td><td><a href={`https://testnet.explorer.nervos.org/block/${r.block}`} target="_blank" rel="noopener">#{r.block} ↗</a><small>{r.time ? new Date(r.time).toLocaleString() : 'Timestamp unavailable'}</small></td></tr>)}</tbody></table></div> : <div className="app-empty"><span>{busy ? '↻' : '≡'}</span><strong>{busy ? 'Reading the flight log…' : error ? 'The chain is temporarily out of reach.' : query ? 'No matching transactions.' : 'No Pilot-signed moves on this page.'}</strong><p>{busy ? 'Checking signatures and confirmed chain receipts.' : query ? 'Try a transaction hash, session key, move, or block.' : 'Refresh or continue through older records below.'}</p></div>}
-    <div className="board-pagination"><span>{updated ? `Checked ${updated.toLocaleTimeString()} · ${rows.length} moves loaded` : 'Live data from the public CKB indexer'}</span>{cursor !== null && loaded && <button className="outline-button" disabled={busy} onClick={() => load()}>{busy ? 'Loading…' : 'Load older transactions ↓'}</button>}{cursor === null && loaded && <span>End of indexed history</span>}</div>
-    <div className="callout"><strong>Signed by Pilot, verified on-chain.</strong><p>This board indexes the deployed counter-session lock, checks the session-signature witness and matching input, and shows committed moves. Owner-signed setup and recovery transactions are excluded. Queued and unbroadcast actions stay in the demo’s transaction inspector.</p></div>
+    <div className="ecosystem-banner board-banner"><div><span className="tiny-label">PILOT BOARD / ALL ACTIVITY</span><h2>Every action.<br />A flight recorded.</h2><p>Across apps, owners, and sessions.<br />Public receipts and available local logs.</p></div><div className="board-symbol"><span>01 ━━━ ✦</span><span>02 ━━━ ✦</span><span>03 ━━━ ✦</span></div></div>
+    <div className="metric-grid"><div><span>Activity records loaded</span><strong>{all.length}</strong></div><div><span>On-chain transactions loaded</span><strong>{loaded ? chain.length : '—'}</strong></div><div><span>On-chain fees in this view</span><strong>{loaded ? amount(fees) : '—'} <small>CKB</small></strong></div></div>
+    <div className="board-toolbar"><div><h2>Activity history</h2><p><i className="status-dot" /> CKB testnet · app receipts · browser timelines</p></div><button className="outline-button" disabled={busy} onClick={() => load(true)}>{busy ? 'Loading…' : 'Refresh ↻'}</button></div>
+    <div className="board-filters" aria-label="Activity sources">{[['all', 'All activity'], ['chain', 'On-chain'], ['social', 'Off-chain'], ['local', 'Local logs']].map(([id, label]) => <button key={id} type="button" className="outline-button" aria-pressed={source === id} onClick={() => setSource(id)}>{label}</button>)}</div>
+    <label className="board-search"><span>⌕</span><input type="search" aria-label="Filter activity" placeholder="Search app, action, owner, hash, session, or log message…" value={query} onChange={e => setQuery(e.target.value)} /></label>
+    {!socialBoardUrl && <p className="board-coverage-note">Shared off-chain receipts are not configured for this website. Set VITE_PILOT_SOCIAL_URL to the hosted verifier’s /api/social URL when building the docs.</p>}
+    {error && <div className="app-message error" role="alert">{error} Available records remain visible.<button className="outline-button" disabled={busy} onClick={() => load()}>Retry</button></div>}
+    <div className="board-records">{visible.map(row => <details className="board-record" key={row.id}>
+      <summary><div><strong>{row.action || 'Pilot action'}</strong><small>{row.app} · {row.source === 'chain' ? 'On-chain' : row.source === 'social' ? 'Off-chain receipt' : 'Local log'}</small></div><span className={`tx-status ${row.source === 'chain' ? 'confirmed' : ''}`}>{row.status}</span><time>{row.time ? new Date(row.time).toLocaleString() : 'Time unavailable'}</time><span aria-hidden="true">＋</span></summary>
+      <div className="board-record-body"><dl><dt>Signer</dt><dd>{row.signer}</dd><dt>Owner {row.source === 'chain' ? 'lock hash' : 'address'}</dt><dd><code>{row.owner || 'Unavailable'}</code></dd><dt>Session / grant</dt><dd><code>{row.session || 'Unavailable'}</code></dd>{row.actionId && <><dt>Action ID / hash</dt><dd><code>{row.actionId}</code></dd></>}{row.target && <><dt>Target</dt><dd>{row.target}</dd></>}{row.hash && <><dt>Transaction</dt><dd><a href={explorer(row.hash)} target="_blank" rel="noopener noreferrer">{row.hash} ↗</a></dd><dt>Block / fee</dt><dd>#{row.block} · {amount(row.fee)} CKB</dd></>}</dl>
+      {row.details.logs && <ol className="board-timeline">{row.details.logs.map((log, index) => <li key={index}><time>{new Date(log.at).toLocaleString()}</time><strong>{log.phase}</strong><p>{log.message}</p></li>)}</ol>}
+      <details><summary>Full record details</summary><pre>{JSON.stringify(row.details, null, 2)}</pre></details></div>
+    </details>)}</div>
+    {!visible.length && <div className="app-empty"><span>{busy ? '↻' : '≡'}</span><strong>{busy ? 'Reading the flight log…' : 'No matching activity loaded.'}</strong><p>Refresh, change the filter, or load older records.</p></div>}
+    <div className="board-pagination"><span>{updated ? `Checked ${updated.toLocaleTimeString()} · ${all.length} records loaded` : 'Reading available activity sources'}</span>{loaded && (cursor.chain !== null || cursor.social !== null) && <button className="outline-button" disabled={busy} onClick={() => load()}>{busy ? 'Loading…' : 'Load older activity ↓'}</button>}{loaded && cursor.chain === null && cursor.social === null && <span>End of available public history</span>}</div>
+    <div className="callout"><strong>All available logs, with their source visible.</strong><p>Both known Pilot lock policies are indexed across apps: setup, funding, delegated transitions, owner actions, and recovery. Shared app receipts are reported by the configured verifier. Local queue, signing, retry, and error timelines are read from this origin’s browser storage, including all stored apps and accounts. Private logs on other origins or devices are not publicly accessible. A local record and its chain receipt appear separately; fees count each loaded chain transaction once.</p></div>
   </>;
 }
 

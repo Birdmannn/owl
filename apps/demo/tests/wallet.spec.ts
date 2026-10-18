@@ -44,3 +44,33 @@ test('Pilot modal and demo fit a mobile viewport',async({page,context})=>{
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({path:'test-results/pilot-mobile.png',fullPage:true});
 });
+
+test('profile activity lists on-chain actions live, distinguishes queued/confirmed, and survives reload', async ({ page, context }) => {
+  await injectWallet(context); await page.goto('/'); await connectThroughPilot(page); await createProfile(page);
+  const address = (await page.getByRole('button', { name: 'Copy CKB address' }).getAttribute('title'))!;
+  await page.evaluate(async address => {
+    const path = '/src/activity.ts';
+    const { updateActivity } = await import(path);
+    const { flightManifest } = await import('/src/manifest.ts' as string);
+    const key = `pilot-demo:v1:${flightManifest.policy.deployment.codeHash}:${address}`;
+    updateActivity(key, 'profile-move-1', { sessionId: 'history-session', kind: 'move', title: 'Move 1', status: 'queued', cost: '100000' }, { phase: 'accepted', message: 'Saved and reserved immediately.' });
+    updateActivity(key, 'profile-move-2', { sessionId: 'history-session', kind: 'move', title: 'Move 2', status: 'confirmed', hash: `0x${'aa'.repeat(32)}` }, { phase: 'confirmed', message: 'Confirmed by the node.' });
+  }, address);
+  const dialog = page.getByRole('dialog', { name: 'Sign these on my behalf' });
+  await dialog.getByText('Activity & logs (2)', { exact: true }).click();
+  const rows = dialog.locator('.pilot-action-history > ol > li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: 'Move 1' })).toContainText('queued');
+  const confirmed = rows.filter({ hasText: 'Move 2' });
+  await expect(confirmed).toContainText('Confirmed on-chain');
+  await confirmed.locator('summary').click();
+  await expect(confirmed).toContainText('counter.increment');
+  await expect(confirmed).toContainText('owl.flight.demo');
+  await expect(confirmed).toContainText('history-session');
+  await expect(confirmed).toContainText(`0x${'aa'.repeat(32)}`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.reload(); await page.getByRole('button', { name: 'Open Pilot' }).click();
+  await page.getByRole('dialog').getByText('Activity & logs (2)', { exact: true }).click();
+  await expect(page.getByRole('dialog').locator('.pilot-action-history > ol > li')).toHaveCount(2);
+});

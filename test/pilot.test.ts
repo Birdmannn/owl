@@ -35,6 +35,21 @@ test('acceptance is optimistic and rapid clicks cannot spend the same reservatio
   assert.equal(pilot.availableBudget, 0n);
 });
 
+test('confirmed owner reconciliation is durable, invalidates readiness, and cannot overwrite queued work or increase budget', async () => {
+  const store = new MemoryStore<State, Action>();
+  const pilot = await create({ store });
+  await pilot.prepare([candidate()]);
+  await pilot.reconcileConfirmed({ position: 4 }, 6n);
+  assert.equal(pilot.readiness('move').ready, false);
+  assert.deepEqual((await create({ store })).confirmedState, { position: 4 });
+  await assert.rejects(pilot.reconcileConfirmed({ position: 9 }, 7n), /cannot increase/);
+  await pilot.prepare([candidate()]); await pilot.execute('move');
+  await assert.rejects(pilot.reconcileConfirmed({ position: 9 }, 3n), /queued settlement/);
+  assert.deepEqual(pilot.state, { position: 5 });
+  await pilot.flush(); await pilot.reconcileConfirmed({ position: 7 }, 3n);
+  assert.deepEqual((await create({ store })).state, { position: 7 });
+});
+
 test('unknown failure retains actions; restart retries the same settlement ID', async () => {
   const store = new MemoryStore<State, Action>();
   const ids: string[] = [];

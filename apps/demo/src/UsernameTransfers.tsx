@@ -1,9 +1,12 @@
+import { getPaymaster } from './runtime';
+import { sponsorshipRequested } from './manifest';
+import { usePilotAccountGuard } from '@owl/pilot-react';
 import { useEffect, useRef, useState } from 'react';
 import { ccc } from '@ckb-ccc/core';
-import { parseCkbAmount, prepareCkbToUsername, prepareSporeToUsername, type PilotUsername } from '@owl/pilot';
+import { SponsorQuoteRejectedError, verifyOwnerSignatureChanges, parseCkbAmount, prepareCkbToUsername, prepareSporeToUsername, type SponsorQuote, type PilotUsername } from '@owl/pilot';
 import { usernameRegistry } from './profile';
-interface Prepared { recipient: PilotUsername; tx: ccc.Transaction; fee: bigint; sender: ccc.Signer; kind: string; value: string }
-interface Receipt { hash: string; bytes: ccc.Hex; username: string; address: string; status: 'signed'|'submitted'|'confirmed'|'rejected'; kind: string; value: string; senderAddress: string; fee: string; events: {at:number;message:string}[]; nodeReceipt?:unknown }
+interface Prepared { paymasterQuote?: SponsorQuote; recipient: PilotUsername; tx: ccc.Transaction; fee: bigint; sender: ccc.Signer; kind: string; value: string }
+interface Receipt { paymasterQuote?: SponsorQuote; hash: string; bytes: ccc.Hex; username: string; address: string; status: 'signed'|'submitted'|'confirmed'|'rejected'; kind: string; value: string; senderAddress: string; fee: string; events: {at:number;message:string}[]; nodeReceipt?:unknown }
 const key = 'pilot:username-transfers:v1';
 const read = (): Receipt[] => { try { return JSON.parse(localStorage.getItem(key)??'[]'); } catch { return []; } };
 const amount = (value: bigint) => ccc.fixedPointToString(value);
@@ -16,12 +19,20 @@ export function UsernameTransfers({signer,onSent}:{signer?:ccc.Signer;onSent:()=
   useEffect(()=>{const refresh=()=>setReceipts(read());window.addEventListener('storage',refresh);return()=>window.removeEventListener('storage',refresh);},[]);
   const save=(rows:Receipt[])=>{localStorage.setItem(key,JSON.stringify(rows));setReceipts(rows);};
   const record=(hash:string,status:Receipt['status'],message:string,receipt?:unknown)=>save(read().map(row=>row.hash===hash?{...row,status,events:[...(row.events??[]),{at:Date.now(),message}],...(receipt?{nodeReceipt:JSON.parse(JSON.stringify(receipt,(_key,value)=>typeof value==='bigint'?value.toString():value))}:{})}:row));
+  usePilotAccountGuard(!!busy);
   const pending=receipts.some(r=>r.status==='signed'||r.status==='submitted');
   const prepare=async()=>{
     if(!signer||locked.current||pending)return;locked.current=true;setBusy('Resolving username and preparing transfer');setError('');
     try{
-      const prepared=kind==='CKB'?await prepareCkbToUsername(usernameRegistry,signer,username,parseCkbAmount(value)):await prepareSporeToUsername(usernameRegistry,signer,username,ccc.hexFrom(value));
-      if(active.current===signer)setReview({...prepared,sender:signer,kind,value});
+      const prepared=kind==='CKB'?await prepareCkbToUsername(usernameRegistry,signer,username,parseCkbAmount(value),{sponsorship:sponsorshipRequested}):await prepareSporeToUsername(usernameRegistry,signer,username,ccc.hexFrom(value),{sponsorship:sponsorshipRequested});
+      const before=prepared.tx.clone();
+      let tx=(await signer.prepareTransaction(before.clone())).clone();
+      if(JSON.stringify(tx.inputs.map(input=>ccc.hexFrom(input.toBytes())))!==JSON.stringify(before.inputs.map(input=>ccc.hexFrom(input.toBytes())))
+        ||JSON.stringify(tx.outputs.map(output=>ccc.hexFrom(output.toBytes())))!==JSON.stringify(before.outputs.map(output=>ccc.hexFrom(output.toBytes())))
+        ||JSON.stringify(tx.outputsData)!==JSON.stringify(before.outputsData))throw new Error('Wallet changed transfer effects during preparation');
+      const sponsor=getPaymaster(signer.client); const paymasterQuote=sponsor ? await sponsor.prepare(tx) : undefined;
+      if(paymasterQuote)tx=ccc.Transaction.fromBytes(paymasterQuote.bytes);
+      if(active.current===signer)setReview({...prepared,tx,paymasterQuote,fee:await tx.getFee(signer.client),sender:signer,kind,value});
     }catch(e){setError(e instanceof Error?e.message:String(e));}finally{locked.current=false;setBusy('');}
   };
   const exclusive=async(operation:()=>Promise<void>)=>{
@@ -32,12 +43,12 @@ export function UsernameTransfers({signer,onSent}:{signer?:ccc.Signer;onSent:()=
     if(!signer||locked.current)return;locked.current=true;setBusy('Checking saved transfer');setError('');
     try{await exclusive(async()=>{
       if(await signer.getRecommendedAddress()!==row.senderAddress)throw new Error('Connect the wallet that signed this transfer');
-      const tx=ccc.Transaction.fromBytes(row.bytes);if(tx.hash()!==row.hash)throw new Error('Saved transfer does not match its transaction hash');
+      let tx=ccc.Transaction.fromBytes(row.bytes);if(tx.hash()!==row.hash)throw new Error('Saved transfer does not match its transaction hash');
       let receipt=await signer.client.getTransactionNoCache(row.hash);
-      if(!receipt||receipt.status==='unknown'){await signer.client.sendTransaction(tx);record(row.hash,'submitted','Rebroadcast the original saved transaction.');receipt=await signer.client.getTransactionNoCache(row.hash);}
+      if(!receipt||receipt.status==='unknown'){if(row.paymasterQuote){const sponsor=getPaymaster(signer.client);if(!sponsor)throw new Error('Restore paymaster to retry');tx=await sponsor.submit(row.paymasterQuote,tx);save(read().map(r=>r.hash===row.hash?{...r,bytes:ccc.hexFrom(tx.toBytes())}:r));}await signer.client.sendTransaction(tx);record(row.hash,'submitted','Rebroadcast the original saved transaction.');receipt=await signer.client.getTransactionNoCache(row.hash);}
       record(row.hash,receipt?.status==='committed'?'confirmed':receipt?.status==='rejected'?'rejected':'submitted','Queried the node receipt for the saved transaction.',receipt);
       onSent();
-    });}catch(e){const message=e instanceof Error?e.message:String(e);setError(message);try{record(row.hash,row.status,`Reconciliation error: ${message}`);}catch{}}finally{locked.current=false;setBusy('');}
+    });}catch(e){const message=e instanceof Error?e.message:String(e);setError(message);try{record(row.hash,e instanceof SponsorQuoteRejectedError && e.quoteId===row.paymasterQuote?.id?'rejected':row.status,`Reconciliation error: ${message}`);}catch{}}finally{locked.current=false;setBusy('');}
   };
   const send=async()=>{
     if(!review||!signer||review.sender!==signer||locked.current||pending)return;locked.current=true;setBusy('Approve transfer in your owner wallet');setError('');
@@ -47,15 +58,19 @@ export function UsernameTransfers({signer,onSent}:{signer?:ccc.Signer;onSent:()=
       const current=await usernameRegistry.resolve(review.recipient.username,review.recipient.network);
       if(current.ownerAddress!==review.recipient.ownerAddress||current.identity!==review.recipient.identity)throw new Error('Recipient changed; review the transfer again');
       if(active.current!==signer)throw new Error('Wallet changed; review again');
-      const tx=await signer.signTransaction(review.tx);
-      const row:Receipt={hash:tx.hash(),bytes:ccc.hexFrom(tx.toBytes()),username:current.username,address:current.ownerAddress,status:'signed',kind:review.kind,value:review.value,senderAddress:await signer.getRecommendedAddress(),fee:review.fee.toString(),events:[{at:Date.now(),message:'Owner signed; exact transaction bytes persisted before broadcast.'}]};
-      save([row,...read()]); // Persist exact signed bytes before broadcasting.
+      const unsigned=review.tx.clone();
+      let tx=await signer.signOnlyTransaction(unsigned.clone());
+      verifyOwnerSignatureChanges(unsigned,tx);
+      const row:Receipt={paymasterQuote:review.paymasterQuote,hash:tx.hash(),bytes:ccc.hexFrom(tx.toBytes()),username:current.username,address:current.ownerAddress,status:'signed',kind:review.kind,value:review.value,senderAddress:await signer.getRecommendedAddress(),fee:review.fee.toString(),events:[{at:Date.now(),message:'Owner signed; exact transaction bytes persisted before broadcast.'}]};
+      save([row,...read().filter(previous=>previous.hash!==row.hash)]); // Persist exact signed bytes before broadcasting.
       savedHash=row.hash;
-      setReview(undefined);setBusy('Submitting transfer');await signer.client.sendTransaction(tx);
+      const quote=review.paymasterQuote;setReview(undefined);setBusy('Submitting transfer');
+      if(quote){const sponsor=getPaymaster(signer.client);if(!sponsor)throw new Error('Restore paymaster to submit');tx=await sponsor.submit(quote,tx);save(read().map(r=>r.hash===row.hash?{...r,bytes:ccc.hexFrom(tx.toBytes())}:r));}
+      else await signer.client.sendTransaction(tx);
       record(row.hash,'submitted','Broadcast the saved owner-signed transaction.');
       setBusy('Confirming transfer');const receipt=await signer.client.waitTransaction(row.hash,1,180_000);
       record(row.hash,receipt?.status==='committed'?'confirmed':receipt?.status==='rejected'?'rejected':'submitted','Finished checking chain confirmation.',receipt);onSent();
-    });}catch(e){const message=e instanceof Error?e.message:String(e);setError(message);if(savedHash){const row=read().find(r=>r.hash===savedHash);if(row)try{record(row.hash,row.status,`Settlement error: ${message}`);}catch{}}}finally{locked.current=false;setBusy('');}
+    });}catch(e){const message=e instanceof Error?e.message:String(e);setError(message);if(savedHash){const row=read().find(r=>r.hash===savedHash);if(row)try{record(row.hash,e instanceof SponsorQuoteRejectedError && e.quoteId===row.paymasterQuote?.id?'rejected':row.status,`Settlement error: ${message}`);}catch{}}}finally{locked.current=false;setBusy('');}
   };
   return <section className="username-transfers"><div className="panel-top"><span>SEND WITH PILOT USERNAMES</span><span className="tag">OWNER WALLET</span></div><h2>Send to a name.</h2><p>Resolve a registered Pilot username, review its address, then sign with your connected wallet.</p><form onSubmit={event=>{event.preventDefault();void prepare();}}>
     <label>Recipient username<input aria-label="Recipient username" placeholder="@pilot_name" value={username} onChange={event=>{setUsername(event.target.value);setReview(undefined);}} disabled={!!busy}/></label>
@@ -63,7 +78,7 @@ export function UsernameTransfers({signer,onSent}:{signer?:ccc.Signer;onSent:()=
     <label>{kind==='CKB'?'Amount (CKB)':'Spore ID'}<input aria-label={kind==='CKB'?'Amount (CKB)':'Spore ID'} placeholder={kind==='CKB'?'100':'0x…'} value={value} onChange={event=>{setValue(event.target.value);setReview(undefined);}} disabled={!!busy}/></label>
     <button className="primary" disabled={!signer||!!busy||pending}>Review transfer →</button></form>
     <p className="fine">CKB and Spore NFTs only. Transfers are separate from Fly forward permissions and require owner approval. Never retry an uncertain transfer by building a new one.</p>
-    {review&&<div className="transfer-review" role="region" aria-label="Review transfer"><h3>Review {review.kind} transfer</h3><p><strong>@{review.recipient.username}</strong> · {review.recipient.provider==='joyid'?'JoyID passkey':'Verified wallet'}</p><code>{review.recipient.ownerAddress}</code><p>{review.kind==='CKB'?`${review.value} CKB`:`Spore ${review.value}`} · Fee {amount(review.fee)} CKB</p><button className="primary" disabled={!!busy||review.sender!==signer} onClick={()=>void send()}>Sign and send</button><button className="secondary" disabled={!!busy} onClick={()=>setReview(undefined)}>Cancel transfer</button></div>}
+    {review&&<div className="transfer-review" role="region" aria-label="Review transfer"><h3>Review {review.kind} transfer</h3><p><strong>@{review.recipient.username}</strong> · {review.recipient.provider==='joyid'?'JoyID passkey':'Verified wallet'}</p><code>{review.recipient.ownerAddress}</code><p>{review.kind==='CKB'?`${review.value} CKB`:`Spore ${review.value}`} · {review.paymasterQuote?'Pool network fee':'Fee'} {amount(review.fee)} CKB{review.paymasterQuote?' · Your network fee: 0 CKB':''}</p><button className="primary" disabled={!!busy||review.sender!==signer} onClick={()=>void send()}>Sign and send</button><button className="secondary" disabled={!!busy} onClick={()=>setReview(undefined)}>Cancel transfer</button></div>}
     {(busy||error)&&<p role="status">{busy||error}</p>}
     {pending&&<p className="fine">A transfer awaits reconciliation. Check its saved receipt before sending again.</p>}
     {receipts.length>0&&<div className="transfer-history"><h3>Transfer receipts</h3>{receipts.map(row=><div key={row.hash}><span>{row.kind} → @{row.username} · {row.status}</span><a href={`https://testnet.explorer.nervos.org/transaction/${row.hash}`} target="_blank" rel="noreferrer">{row.hash.slice(0,12)}… ↗</a>{(row.status==='signed'||row.status==='submitted')&&<button className="secondary" disabled={!signer||!!busy} onClick={()=>void check(row)}>Check / retry saved transfer</button>}<details><summary>Transaction details and logs</summary><p>Sender: <code>{row.senderAddress}</code></p><p>Recipient: <code>{row.address}</code></p><p>{row.kind}: {row.value} · Reviewed fee: {row.fee?amount(BigInt(row.fee)):'—'} CKB</p><ol>{row.events?.map((event,index)=><li key={index}>{new Date(event.at).toLocaleString()} · {event.message}</li>)}</ol><pre>{JSON.stringify({hash:row.hash,transaction:JSON.parse(ccc.Transaction.fromBytes(row.bytes).stringify()),signedBytes:row.bytes,nodeReceipt:row.nodeReceipt},null,2)}</pre></details></div>)}</div>}

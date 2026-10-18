@@ -26,55 +26,67 @@ export const quickstart = {
     {
       id: 'connect-wallet', title: '3. Connect the owner wallet',
       html: '<p>For React + Vite, use the following as <code>src/App.tsx</code> in your app. It connects an existing owner wallet through CCC and displays its CKB testnet address. Pilot manages usernames in its profile flow; app developers do not configure username storage here.</p><p>Connecting a wallet alone does not grant automatic signing permission. Add the Pilot modal and session flow in the next step.</p>',
-      ...code(`import { useEffect, useState } from 'react';
+      ...code(`import type { ReactNode } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
+import { PilotAccountsProvider, PilotAccountMenu, usePilotAccounts } from '@owl/pilot-react';
+import '@owl/pilot-react/styles.css';
 
 const client = new ccc.ClientPublicTestnet();
 
+function AccountBridge({ children }: { children: ReactNode }) {
+  const wallet = ccc.useCcc();
+  const connect = () => {
+    const show = () => {
+      wallet.open();
+      requestAnimationFrame(() => wallet.open());
+    };
+    if (wallet.signerInfo) {
+      wallet.disconnect();
+      setTimeout(show, 200); // Allow CCC to finish closing its old connection.
+    } else show();
+  };
+  return <PilotAccountsProvider network="ckb-testnet"
+    signer={wallet.signerInfo?.signer} walletName={wallet.wallet?.name}
+    connectorOpen={wallet.isOpen} onConnectWallet={connect}
+    onDisconnectWallet={wallet.disconnect}
+    connectJoyId={async () => {
+      const signer = new ccc.JoyId.CkbSigner(client, 'My app',
+        new URL('/owl.png', location.origin).href, undefined, undefined,
+        { get: async () => undefined, set: async () => {} });
+      await signer.connect(); // Always open fresh JoyID authentication.
+      return signer;
+    }}>
+    {children}
+  </PilotAccountsProvider>;
+}
+
 function PilotAccount() {
-  const { open, disconnect, signerInfo } = ccc.useCcc();
-  const signer = signerInfo?.signer;
-  const [address, setAddress] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    setAddress('');
-    setError('');
-    if (signer) {
-      void signer.getRecommendedAddress().then(value => {
-        if (active) setAddress(value);
-      }).catch(reason => {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason));
-      });
-    }
-    return () => { active = false; };
-  }, [signer]);
-
+  const { signer, accounts, currentId, connectWallet, disconnect, switching } = usePilotAccounts();
   return <section>
     <h1>Pilot in my app</h1>
-    {!signer
-      ? <button onClick={() => open()}>Connect wallet</button>
-      : <button onClick={() => disconnect()}>Disconnect</button>}
-    {address && <p>{address}</p>}
-    <p role="status">{error}</p>
+    <PilotAccountMenu />
+    <p>{accounts.find(account => account.id === currentId)?.address}</p>
+    <button disabled={switching}
+      onClick={signer ? disconnect : connectWallet}>
+      {signer ? 'Disconnect' : 'Connect wallet'}
+    </button>
   </section>;
 }
 
 export default function App() {
   return <ccc.Provider name="My app" defaultClient={client}>
-    <PilotAccount />
+    <AccountBridge><PilotAccount /></AccountBridge>
   </ccc.Provider>;
 }`, 'tsx'),
     },
     {
       id: 'add-pilot-modal', title: '4. Add the Pilot modal and automatic signing',
-      html: '<p>Import the installed UI package and its stylesheet in your React app. Place an <code>owl.png</code> brand image in your app’s public assets; the current modal reads it from <code>/owl.png</code>. You can copy the demo’s public owl asset from your Pilot checkout.</p><p><code>PilotModal</code> is a controlled component: your app provides the manifest, account, username, session state, and callbacks. The <a href="#integration">connector and modal guide</a> explains the integration responsibilities; <code>apps/demo/src/main.tsx</code> and <code>apps/demo/src/runtime.ts</code> in the checkout contain the complete working counter-session wiring.</p>',
+      html: '<p>Import the installed UI package and its stylesheet in your React app. Place an <code>owl.png</code> brand image in your app’s public assets; the current modal reads it from <code>/owl.png</code>. You can copy the demo’s public owl asset from your Pilot checkout.</p><p><code>PilotModal</code> is a controlled component: your app provides the manifest, account, username, session state, and callbacks. For multiple accounts, wrap the modal with <code>PilotAccountsProvider</code> and use <code>usePilotAccounts()</code> as the active signer source; the demo’s <code>AccountBridge</code> shows CCC and fresh JoyID authentication wiring. See <a href="#wallet-flow/account-switching">account switching</a>. The <a href="#integration">connector and modal guide</a> explains the integration responsibilities; <code>apps/demo/src/main.tsx</code> and <code>apps/demo/src/runtime.ts</code> in the checkout contain the complete working counter-session wiring.</p>',
       ...code("import { PilotModal } from '@owl/pilot-react';\nimport '@owl/pilot-react/styles.css';"),
       table: [
-        ['Owner connection', 'Use CCC’s connected signer. Pilot keeps ownership in the existing wallet.'],
+        ['Owner connection', 'Use the signer from usePilotAccounts(). Pilot checks the selected account while the existing wallet keeps ownership.'],
         ['Username', 'Use PilotUsernameClient.findByAddress() or register() in the modal’s onProfile callback.'],
-        ['App manifest', 'Describe the supported counter.increment action, deployed counter script, fees, budget, and protected capacity.'],
+        ['App manifest', 'Use the legacy counter manifest or define named actions and builders with a version-2 delegation manifest. See Cell delegation.'],
         ['Session approval', 'Generate and persist a session key, then call PilotCounterConnector.authorize() with the user’s selected permission. Persist submitted setup before awaiting confirmation.'],
         ['Instant app actions', 'Create CkbCounterAdapter and Pilot with durable stores, check the grant, prepare possible actions, and render pilot.state after execute(). Settlement runs in the background.'],
       ],
@@ -86,7 +98,7 @@ export default function App() {
     },
     {
       id: 'supported-scope', title: 'What you can integrate today',
-      html: '<p>The SDK’s username lookup and CKB/Spore builders can be used by other apps today. Automatic signing currently supports the deployed <code>counter-v1</code> policy only. Another app’s arbitrary contract actions need a compatible on-chain policy and adapter; installing the package alone does not add that authority.</p><p>For a complete interactive example of the current policy, open the testnet demo. It uses the same SDK and React modal packages you installed above.</p>',
+      html: '<p>The SDK’s username lookup and CKB/Spore builders can be used by other apps today. The public testnet flight uses <code>counter-v1</code>. The new <a href="#cell-delegation">developer delegation API</a> supports named builders, selected subsets, and creation/migration under a reusable bounded-u64 policy verified on local CKB. Another app’s arbitrary contract actions need a compatible on-chain policy and adapter; installing the package alone does not add that authority.</p><p>For a complete interactive example of the current policy, open the testnet demo. It uses the same SDK and React modal packages you installed above.</p>',
       demo: true,
     },
   ],

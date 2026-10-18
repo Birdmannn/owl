@@ -1,4 +1,8 @@
 #[cfg(test)]
+mod sponsored;
+#[cfg(test)]
+mod delegation;
+#[cfg(test)]
 mod tests {
     use ckb_testtool::{
         builtin::ALWAYS_SUCCESS,

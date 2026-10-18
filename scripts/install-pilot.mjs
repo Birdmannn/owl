@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -78,10 +78,13 @@ function main() {
   run('npm', ['pkg', 'set', ...coreSettings], app);
   run('npm', ['config', 'set', 'install-links', 'true', '--location=project'], app);
   const packages = [source, join(source, 'packages/react'), '@ckb-ccc/connector-react@1.1.9', 'react@^19', 'react-dom@^19'];
+  // npm can retain stale file: copies when the checkout version is unchanged.
+  // Remove only our generated dependency copies; never follow symlinks into the checkout.
+  for (const name of ['pilot', 'pilot-react']) rmSync(join(app, 'node_modules', '@owl', name), { recursive: true, force: true });
   run('npm', ['install', '--install-links', ...packages], app);
   console.log(`\nPilot installed. Import from '@owl/pilot' and '@owl/pilot-react'.
 Keep the checkout at ${source} available for future installs and CI.
-Next: configure your registry URL and wire the SDK into your app.
+Next: choose an on-chain or off-chain flow and wire the SDK into your app.
 Docs: https://github.com/Birdmannn/owl (apps/docs)`);
 }
 

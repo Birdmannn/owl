@@ -21,12 +21,16 @@
     "demo": "tsx examples/game.ts",
     "check": "npm run typecheck && npm test && npm run build",
     "ckb": "tsx scripts/ckb.ts",
+    "delegation": "tsx scripts/cell-delegation.ts",
     "contracts:build": "bash scripts/build-contract.sh",
     "contracts:test": "cd contracts && cargo test -p pilot-contract-tests",
-    "check:all": "npm run check && npm run contracts:build && npm run contracts:test",
+    "check:all": "npm run contracts:build && npm run check && npm run contracts:test",
     "testnet:verify": "tsx scripts/verify-proof.ts",
     "registry": "node --env-file-if-exists=.env --import tsx scripts/registry.ts",
-    "test:registry:postgres": "tsx --test test/registry-postgres.test.ts"
+    "test:registry:postgres": "tsx --test test/registry-postgres.test.ts",
+    "social": "node --env-file-if-exists=.env --import tsx scripts/social.ts",
+    "paymaster": "node --env-file-if-exists=.env --import tsx scripts/paymaster.ts",
+    "paymaster:deploy": "node --env-file-if-exists=.env --import tsx scripts/deploy-sponsored.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

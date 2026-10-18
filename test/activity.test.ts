@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { recordPilotActivity, readPilotActivity, pilotActivityKey } from '../src/index.js';
+test('account history isolates wallets, preserves every action and timeline, and excludes extra key fields', () => {
+  const data = new Map<string, string>();
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+  const entry = { id: 'one', ownerAddress: 'alice', appId: 'social', sessionId: 'grant', actionId: 'like', name: 'Like', kind: 'offchain' as const, status: 'signed', privateKey: 'DO_NOT_SAVE' };
+  recordPilotActivity(storage, { ...entry, event: { phase: 'signed', message: 'Saved before sending' } });
+  recordPilotActivity(storage, { ...entry, status: 'accepted', event: { phase: 'accepted', message: 'Accepted once' } });
+  assert.equal(readPilotActivity(storage, 'alice').length, 1);
+  assert.equal(readPilotActivity(storage, 'alice')[0]!.logs.length, 2);
+  assert.equal(readPilotActivity(storage, 'alice')[0]!.status, 'accepted');
+  assert.equal(data.get(pilotActivityKey('alice'))!.includes('DO_NOT_SAVE'), false);
+  for (let n = 0; n < 120; n++) recordPilotActivity(storage, { ...entry, id: String(n) });
+  assert.equal(readPilotActivity(storage, 'alice').length, 121);
+  assert.deepEqual(readPilotActivity(storage, 'bob'), []);
+  storage.setItem(pilotActivityKey('bob'), JSON.stringify(readPilotActivity(storage, 'alice')));
+  assert.deepEqual(readPilotActivity(storage, 'bob'), []);
+  storage.setItem(pilotActivityKey('bob'), 'broken JSON'); assert.deepEqual(readPilotActivity(storage, 'bob'), []);
+});

@@ -1,0 +1,141 @@
+{
+  "network": "devnet",
+  "ownerAddress": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfk5lrvdftnlkddwsmmr5dyadxxlnum5xchkgdv4",
+  "verifiedAt": "2026-10-13T22:08:53.865Z",
+  "deployment": {
+    "network": "devnet",
+    "genesisHash": "0xb15fa8a50781f3a8bf84759682e2ce4027b7ae5361df45e8b68855ee413104be",
+    "codeHash": "0x8c8c113bd94b15da8c70e9c2f739fc462117c5b987963cb7f66dbcfe84bd2b4a",
+    "outPoint": {
+      "txHash": "0xb76cc8b9c88d975c2e84ac10b2b5ca0cb36b49b0d03db160b6038d445724a993",
+      "index": 0
+    }
+  },
+  "emptySelection": "Connected without funding or signing",
+  "source": {
+    "txHash": "0x2dcee39b43202fde87ca526cb42e5f5eacb80a5544d2b5cebbf8da2ed0de14e9",
+    "index": 0
+  },
+  "review": {
+    "mode": "migrate",
+    "source": {
+      "txHash": "0x2dcee39b43202fde87ca526cb42e5f5eacb80a5544d2b5cebbf8da2ed0de14e9",
+      "index": 0
+    },
+    "sourceCapacity": "35002000000",
+    "appScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "stateData": "0x0500000000000000",
+    "permissions": [
+      {
+        "id": "game.forward",
+        "name": "Move forward"
+      }
+    ],
+    "ownerAddress": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfk5lrvdftnlkddwsmmr5dyadxxlnum5xchkgdv4",
+    "delegatedCapacity": "35002000000",
+    "protectedCapacity": "35000000000",
+    "feeBudget": "2000000",
+    "setupFee": "724",
+    "transactionHash": "0xaf0ffb3b62cc6b016395c119da6c36b520a8fd9785aeb3686a75f38aeed08089"
+  },
+  "cell": {
+    "lock": {
+      "codeHash": "0x8c8c113bd94b15da8c70e9c2f739fc462117c5b987963cb7f66dbcfe84bd2b4a",
+      "hashType": "data2",
+      "args": "0x4c6144f7f909592616c11cc690fd34ca6a8bda984aa97674101cb56c4ff5973402d03fed5a635a760a231dc378149d03b27b60cbdb7a14cd0c01c650319a4eacf43f793e87252f5763c601083bb77be289780812bd21f83694b3e220e0738470b50000000000000000000000000000000000000000000000000000000000000000a086010000000000009e2926080000000175cdb6b72b15da9b7dcdbaf5f062f42d2cade0a0f76920360beba036a2fa629400000000000100000000000000"
+    },
+    "outPoint": {
+      "txHash": "0xaf0ffb3b62cc6b016395c119da6c36b520a8fd9785aeb3686a75f38aeed08089",
+      "index": 0
+    },
+    "grant": {
+      "version": 2,
+      "manifestHash": "0x3f793e87252f5763c601083bb77be289780812bd21f83694b3e220e0738470b5",
+      "permissions": [
+        "game.forward"
+      ]
+    },
+    "ownerLock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0x36a7c6c6a573fd9ad7437b1d1a4eb4c6fcf9ba1b"
+    },
+    "sessionPublicKey": "0x02d03fed5a635a760a231dc378149d03b27b60cbdb7a14cd0c01c650319a4eacf4"
+  },
+  "setup": "0xaf0ffb3b62cc6b016395c119da6c36b520a8fd9785aeb3686a75f38aeed08089",
+  "session": {
+    "id": "devnet-delegation",
+    "network": "ckb-devnet",
+    "policyVersion": "delegation-v1",
+    "expiresAt": 1792015538599
+  },
+  "move": {
+    "txHash": "0x68e121404dc951bf7408c2cd27b93445460d82636f473966b8fe5a89244bba76",
+    "index": 0
+  },
+  "confirmedPosition": 6,
+  "unselectedActionRejected": {
+    "vmCode": 10,
+    "detail": "Client request error TransactionFailedToVerify: Script(TransactionScriptError { source: Inputs[0].Lock, cause: ValidationFailure: see error code 10 on page https://nervosnetwork.github.io/ckb-script-error-codes/by-data-hash/8c8c113bd94b15da8c70e9c2f739fc462117c5b987963cb7f66dbcfe84bd2b4a.html#10 })"
+  },
+  "manual": "0xc3db10fbec17e44105c96f5d6a3508cb42fce38c113472333e3b03e817b01692",
+  "manualAdopted": true,
+  "positionAfterOwnerAction": 8,
+  "recovery": "0x8507c1dcbfe16ceec5bb3df88146fc807d65c289d4cf11ba862aab7d957da243",
+  "recoveredCapacity": "35001900000",
+  "createdCell": {
+    "lock": {
+      "codeHash": "0x8c8c113bd94b15da8c70e9c2f739fc462117c5b987963cb7f66dbcfe84bd2b4a",
+      "hashType": "data2",
+      "args": "0x4c6144f7f909592616c11cc690fd34ca6a8bda984aa97674101cb56c4ff5973402d03fed5a635a760a231dc378149d03b27b60cbdb7a14cd0c01c650319a4eacf43f793e87252f5763c601083bb77be289780812bd21f83694b3e220e0738470b50000000000000000000000000000000000000000000000000000000000000000a086010000000000009e29260800000002538d13d56731f1df8b063ee96d8b19942970f68e6c586b8cf98f9ef906a44f4d0100000000010000000000000075cdb6b72b15da9b7dcdbaf5f062f42d2cade0a0f76920360beba036a2fa629400000000000100000000000000"
+    },
+    "outPoint": {
+      "txHash": "0x43643c46f94bd66d3a90854f0c686c72cbef38745a58303dd5d628b856d45af3",
+      "index": 0
+    },
+    "grant": {
+      "version": 2,
+      "manifestHash": "0x3f793e87252f5763c601083bb77be289780812bd21f83694b3e220e0738470b5",
+      "permissions": [
+        "game.backward",
+        "game.forward"
+      ]
+    },
+    "ownerLock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0x36a7c6c6a573fd9ad7437b1d1a4eb4c6fcf9ba1b"
+    },
+    "sessionPublicKey": "0x02d03fed5a635a760a231dc378149d03b27b60cbdb7a14cd0c01c650319a4eacf4"
+  },
+  "creationReview": {
+    "mode": "create",
+    "appScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "stateData": "0x0500000000000000",
+    "permissions": [
+      {
+        "id": "game.forward",
+        "name": "Move forward"
+      },
+      {
+        "id": "game.backward",
+        "name": "Move backward"
+      }
+    ],
+    "ownerAddress": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfk5lrvdftnlkddwsmmr5dyadxxlnum5xchkgdv4",
+    "delegatedCapacity": "35002000000",
+    "protectedCapacity": "35000000000",
+    "feeBudget": "2000000",
+    "setupFee": "725",
+    "transactionHash": "0x43643c46f94bd66d3a90854f0c686c72cbef38745a58303dd5d628b856d45af3"
+  },
+  "twoActions": {
+    "position": 5,
+    "budget": "1800000",
+    "lastOutPoint": {
+      "txHash": "0x60fbcd98004e7dc456b90fb1815f07bf94e88e5be55fae38c77f6523f59a78fb",
+      "index": 0
+    }
+  },
+  "complete": true
+}

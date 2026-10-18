@@ -1381,12 +1381,39 @@ dependencies = [
 name = "pilot-contract-tests"
 version = "0.1.0"
 dependencies = [
+ "blake2b-ref",
  "ckb-testtool",
  "k256",
 ]
 
 [[package]]
+name = "pilot-delegation-lock"
+version = "0.1.0"
+dependencies = [
+ "blake2b-ref",
+ "ckb-std",
+ "k256",
+]
+
+[[package]]
 name = "pilot-session-lock"
+version = "0.1.0"
+dependencies = [
+ "ckb-std",
+ "k256",
+]
+
+[[package]]
+name = "pilot-sponsored-delegation-lock"
+version = "0.1.0"
+dependencies = [
+ "blake2b-ref",
+ "ckb-std",
+ "k256",
+]
+
+[[package]]
+name = "pilot-sponsored-session-lock"
 version = "0.1.0"
 dependencies = [
  "ckb-std",

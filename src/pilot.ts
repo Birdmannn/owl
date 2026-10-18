@@ -56,6 +56,18 @@ export class Pilot<State, Action> {
     return BigInt(this.journal.remainingBudget) - this.journal.queue.reduce((sum, entry) => sum + BigInt(entry.cost), 0n);
   }
 
+  /** Host must first verify a confirmed owner action. Never replace unresolved optimistic work. */
+  reconcileConfirmed(state: State, remainingBudget: bigint): Promise<void> {
+    return this.exclusive(async () => {
+      if (this.journal.queue.length) throw new Error('Resolve queued settlement before reconciling owner state');
+      if (remainingBudget < 0n || remainingBudget > BigInt(this.journal.remainingBudget)) throw new Error('Owner reconciliation cannot increase this session allowance');
+      const next = { ...structuredClone(this.journal), confirmedState: structuredClone(state), projectedState: structuredClone(state),
+        remainingBudget: remainingBudget.toString(), revision: this.journal.revision + 1 };
+      await this.options.store.save(next);
+      this.journal = next; this.ready.clear();
+    });
+  }
+
   readiness(id: string): Readiness {
     const cached = this.ready.get(id)?.result;
     if (!cached || cached.revision !== this.journal.revision) {

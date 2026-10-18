@@ -2,7 +2,7 @@
 
 **Owl's Pilot** is a session SDK for CKB apps: approve a bounded session once, then interact instantly while transactions settle in the background.
 
-Pilot now includes a real CKB counter-session lock and CCC adapter, alongside the optimistic engine. `npm run demo` remains a local simulation; `npm run ckb` uses real CKB transactions. The owner authorizes a restricted session by funding a compatible cell. Connecting an ordinary wallet alone does not grant a session key permission to spend its cells. This is a testnet prototype, not a production wallet or general-purpose session policy system.
+Pilot includes an optimistic engine, the public-testnet counter integration, and a reusable cell-delegation lock with a developer setup API. Developers register named actions, state codecs, and transaction builders; users choose permissions and explicitly create or migrate one app cell. `npm run demo` remains a simulation; `npm run ckb` and `npm run delegation` submit real CKB transactions. Connecting an ordinary wallet alone does not grant a session key permission to spend its cells. This remains a bounded testnet/devnet prototype.
 
 ## Install into your app
 
@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/Birdmannn/owl/main/scripts/install-
 
 The installer automatically includes the SDK, React 19 modal, and CCC wallet connector. It clones a sibling `pilot` checkout if needed, builds it, and installs local package copies. No npm or GitHub Packages publication is needed. If already cloned, run `node ../pilot/scripts/install-pilot.mjs` from your app. Use `--source PATH` for another checkout, `--app PATH` for another app, and `--help` for options.
 
-Keep the checkout available for future installs. To update, pull your chosen revision there and re-run the installer. The installer sets CCC core to `1.23.0` and `install-links=true` in your app’s `.npmrc`; commit that file and your app’s lockfile. In CI, restore and build the same Pilot revision before installing app dependencies. Wallet connection and app integration are described in the website Quickstart; the installer does not start services or edit app source.
+Keep the checkout available for future installs. To update, pull your chosen revision there and re-run the installer. It refreshes the installed Pilot package copies even when their version is unchanged. The installer sets CCC core to `1.23.0` and `install-links=true` in your app’s `.npmrc`; commit that file and your app’s lockfile. In CI, restore and build the same Pilot revision before installing app dependencies. Wallet connection and app integration are described in the website Quickstart; the installer does not start services or edit app source.
 
 ## Run
 
@@ -23,6 +23,30 @@ npm install
 npm run check
 npm run demo
 ```
+
+## Off-chain social signing
+
+Pilot also supports scoped message delegation for likes, follows, posts, and other app-defined off-chain actions. The owner signs a grant once; `PilotOffchainSession` signs selected actions with a separate key. The receiving app verifies owner and session proofs and atomically enforces replay protection, revocation, and business rules. No CKB transaction or fee budget is required for these messages.
+
+The demo’s **Pilot Social** panel works in explicitly labelled browser-local mode on a static HTTPS host. For shared state, an optional persistent Node verifier is included via `npm run social`; configure its audience and set `VITE_PILOT_SOCIAL_URL` before building. See [OFFCHAIN_SIGNING.md](OFFCHAIN_SIGNING.md) for APIs, diagrams, hosting, and verification limits, and the website’s **Off-chain signing** page. A reviewable community issue draft is in [CATALYST_FEEDBACK.md](CATALYST_FEEDBACK.md).
+
+## Set up your app for cell delegation
+
+Use `definePilotApp()` to supply a version-2 `PilotAppManifest`, `encodeState()`/`decodeState()`, and one `validate()`/`apply()`/`buildTransaction()` builder per named action. The manifest specifies human-readable names, operation labels, optional app type-script identity and cell dependency, cell-selection rules, transitions, deployment, and fee/capacity limits. See the complete [developer example](examples/cell-delegation.ts), [implementation guide](CELL_DELEGATION.md), and the website’s **Cell delegation** page.
+
+`PilotConnector.prepareDelegation()` builds a review for a new app cell or an explicitly selected owner-locked cell. `authorize()` requests the owner signature only after review and persists signed bytes before broadcast. Empty selection stays connected without funding. The reusable lock commits the chosen subset and enforces it on-chain; an owner-only action cannot enter a grant. Unsupported migrations fail the signed dry-run rather than bypassing app rules.
+
+`PilotDelegationAdapter` routes `{ id, params }` actions to the registered builders and independently checks their effects before session signing. The current lock supports fixed increments/decrements of a declared u64 field, preserving all other data, the app type script, the lock, and protected capacity. It does not support arbitrary multi-cell or NFT transitions. The SDK also provides reviewed owner-signed actions, confirmed-state reconciliation, and recovery that preserves app state and returns ownership.
+
+Build and verify locally:
+
+```sh
+npm run contracts:build
+# Separate terminal: offckb node
+npm run delegation -- verify devnet
+```
+
+The verifier uses generated, ignored test keys and local faucet funds. Public evidence is in [the devnet proof](deployments/cell-delegation-devnet-proof.json). The browser demo includes a **Developer cell delegation** panel with selectable actions, explicit creation/migration, an owner-only jump, recovery, and detailed logs. It needs a real public testnet deployment JSON; one is not configured by default. The existing flight demo keeps its deployed counter policy.
 
 ## End to end: what happens behind the scenes
 
@@ -103,7 +127,7 @@ sequenceDiagram
 
 Every move consumes the current session cell and creates its successor with the same lock, counter increased by one, and capacity and fee budget reduced by 0.001 CKB. For example, after three confirmed moves, the cell holds **150.017 CKB**: 150 protected CKB plus 0.017 CKB of remaining budget. There is still one real CKB transaction per move.
 
-The contract rejects extra payments, other actions, changed locks, invalid signatures, fees above the cap, budget overspending, and capacity below the protected floor. Username-based CKB and NFT transfers are separate owner-signed operations; the counter grant does not authorize them. Paymaster sponsorship is not implemented, so this flow uses the user's funded fee budget.
+The contract rejects extra payments, other actions, changed locks, invalid signatures, fees above the cap, budget overspending, and capacity below the protected floor. Username-based CKB and NFT transfers are separate owner-signed operations; the counter grant does not authorize them. This original deployment uses the user's funded fee budget. Separate sponsored policies and a fee service are now available; see [paymaster setup and accounting](PAYMASTER.md).
 
 ### 3. Handle interruptions and return the funds
 
@@ -175,7 +199,7 @@ The owner wallet funds a cell containing a counter and cumulative fee budget. It
 
 `authorizeCounter(ownerSigner, options)` and `revokeCounter(ownerSigner, ...)` accept an existing CCC signer, including a signer obtained from the CCC wallet connector. `CkbCounterAdapter` handles session-key signing and real background settlement without invoking the owner signer for each move. The CLI uses a generated test-only private-key signer to verify the flow automatically; a browser wallet popup flow has not been manually tested.
 
-See [contract format and limits](contracts/README.md). This version has **local expiration only**, a fixed counter policy, and sequential settlement. The architecture's separate authority cell, app policy modules, embedded signer isolation, sponsorship, and on-chain expiration are not implemented yet.
+See [contract format and limits](contracts/README.md). This version has **local expiration only**, a fixed counter policy, and sequential settlement. The architecture's separate authority cell, app policy modules, embedded signer isolation and on-chain expiration are not implemented yet. Sponsored variants require their own deployment and service; see [PAYMASTER.md](PAYMASTER.md).
 
 ### Local chain
 
@@ -227,3 +251,16 @@ npm run check:all
 ```
 
 The package remains private while the protocol and wallet integrations are developed.
+
+
+## Signing security and profile history
+
+The connected Pilot modal includes expandable **Activity & logs** for recorded on-chain and off-chain actions, with per-action timelines and owner filtering. Integrators wire public action metadata through `recordPilotActivity` or supply the modal's `activity` prop. This local history is not a global ledger or authorization proof.
+
+Read [SECURITY_AUDIT.md](SECURITY_AUDIT.md) before using signing flows. This review hardened builder snapshots, reviewed wallet effects, account restoration, and settlement records. New setup rejects unsupported or permissionless owner-lock configurations. The underlying owner-input contract assumption remains; raw browser key storage and local-only on-chain expiry also remain unresolved. Pilot is a bounded testnet prototype, not a production key vault or independently certified wallet.
+
+## Pool-paid network fees
+
+Pilot can use Owl’s pool through `PilotPaymasterClient`. Sponsored counter and reusable-delegation policies preserve the user’s app-cell capacity. The pool input/change pays the entire CKB network fee; users still provide their storage capacity, transfers, and app payments. There is no automatic user-paid fallback.
+
+This is implemented and tested in the SDK/service and CKB VM, but is **not activated on public testnet**: the new binaries require deployment and the pool service requires its matching server-only key. The configured receiving address had **0 CKB** when checked on October 18, 2026. Existing v1 sessions still pay their own fees. See [PAYMASTER.md](PAYMASTER.md) for activation, integration, retry behavior and limits.

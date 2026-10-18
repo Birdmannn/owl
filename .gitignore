@@ -10,3 +10,9 @@ contracts/build/
 !.env.example
 data/pilot-usernames.json
 data/pilot-usernames.json.*
+
+data/pilot-social.json
+data/pilot-social.json.*
+
+data/pilot-paymaster.json
+data/pilot-paymaster.json.*

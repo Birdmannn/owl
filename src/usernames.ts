@@ -59,7 +59,7 @@ export function parseCkbAmount(value: string): bigint {
   return amount;
 }
 /** Build only: the integrating app reviews and requests the owner signature separately. */
-export async function prepareCkbToUsername(registry: PilotUsernameClient, signer: ccc.Signer, username: string, capacity: bigint) {
+export async function prepareCkbToUsername(registry: PilotUsernameClient, signer: ccc.Signer, username: string, capacity: bigint, options: { sponsorship?: boolean } = {}) {
   const recipient = await registry.resolve(username, signerNetwork(signer));
   const address = await ccc.Address.fromString(recipient.ownerAddress, signer.client);
   const tx = ccc.Transaction.from({ outputs: [{ lock: address.script, capacity }], outputsData: ['0x'] });
@@ -67,11 +67,12 @@ export async function prepareCkbToUsername(registry: PilotUsernameClient, signer
   const minimum = ccc.fixedPointFrom(tx.outputs[0]!.occupiedSize);
   if (capacity < minimum) throw new Error(`Recipient needs at least ${ccc.fixedPointToString(minimum)} CKB to create a cell`);
   await tx.completeInputsByCapacity(signer);
-  await tx.completeFeeBy(signer, 1000n);
+  await tx.completeFeeBy(signer, options.sponsorship ? 0n : 1000n);
+  if (options.sponsorship && await tx.getFee(signer.client) !== 0n) throw new Error('Sponsored transfer must pay zero user network fee');
   return { recipient, tx, fee: await tx.getFee(signer.client) };
 }
 /** NFT support is explicitly Spore; other NFT standards need their own builders. */
-export async function prepareSporeToUsername(registry: PilotUsernameClient, signer: ccc.Signer, username: string, id: ccc.HexLike) {
+export async function prepareSporeToUsername(registry: PilotUsernameClient, signer: ccc.Signer, username: string, id: ccc.HexLike, options: { sponsorship?: boolean } = {}) {
   const recipient = await registry.resolve(username, signerNetwork(signer));
   const address = await ccc.Address.fromString(recipient.ownerAddress, signer.client);
   const { cell } = await assertSpore(signer.client, id);
@@ -79,6 +80,7 @@ export async function prepareSporeToUsername(registry: PilotUsernameClient, sign
   if (!owned.some(address => address.script.eq(cell.cellOutput.lock))) throw new Error('This Spore NFT is not owned by the connected wallet');
   const { tx } = await transferSpore({ signer, id, to: address.script });
   await tx.completeInputsByCapacity(signer);
-  await tx.completeFeeBy(signer, 1000n);
+  await tx.completeFeeBy(signer, options.sponsorship ? 0n : 1000n);
+  if (options.sponsorship && await tx.getFee(signer.client) !== 0n) throw new Error('Sponsored transfer must pay zero user network fee');
   return { recipient, tx, fee: await tx.getFee(signer.client) };
 }

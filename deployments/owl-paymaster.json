@@ -1,5 +1,5 @@
 {
   "network": "ckb-testnet",
-  "address": null,
-  "sponsorship": "not-implemented"
+  "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwxncdjz6ex6flcanz5hrl5wdjrllky8fcfvudr5",
+  "sponsorship": "requires-activation"
 }

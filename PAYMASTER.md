@@ -1,0 +1,100 @@
+# Owl paymaster and Pilot
+
+The pool sponsors **CKB network transaction fees only**. The user still supplies recoverable cell capacity, transferred CKB/NFTs, and application payments. Sponsored user inputs equal user outputs exactly; pool input minus pool change pays the entire transaction fee.
+
+The service, SDK client, and new contract variants are implemented and tested. **Public activation is pending.** The configured receiving address had **0 CKB** on October 18, 2026. No sponsored deployment outpoints or pool secret were invented. Original public v1 sessions remain self-funded.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant SDK as Pilot SDK
+    participant Pool as Owl fee service
+    participant Chain as CKB
+    App->>SDK: Approved action
+    SDK->>SDK: Build user effects with zero user fee
+    SDK->>Pool: Request unsigned quote
+    Pool-->>SDK: Append pool input/change and bounded fee
+    SDK->>SDK: Independently check effects, pool identity and conservation
+    SDK->>SDK: Owner/session signs; persist quote + exact bytes
+    SDK->>Pool: Submit user-signed transaction
+    Pool->>Pool: Check effects, quotas and pool lease
+    Pool->>Pool: Co-sign and dry-run all scripts
+    Pool->>Pool: Persist signed bytes and pool lease
+    Pool->>Chain: Broadcast
+    Pool-->>SDK: Exact co-signed transaction
+    SDK->>SDK: Persist final bytes
+    Chain-->>App: Background confirmation
+```
+
+The optimistic engine still renders accepted actions immediately. A service failure leaves settlement retryable; it never silently charges the user's session cell. Optimistic acceptance is not a guarantee of settlement or a reservation of pool liquidity.
+
+## Activate on testnet
+
+1. Build contracts with `npm run contracts:build`.
+2. Set server-only `PILOT_DEPLOYER_PRIVATE_KEY` to a funded testnet infrastructure account. Run `npm run paymaster:deploy -- both` (or `counter` / `delegation`). This deploys separate code cells and writes verified outpoints to `deployments/pilot-sponsored.json`. Code-cell occupied capacity is substantial; this infrastructure cost is paid by the deployer. Deployment saves exact signed bytes before broadcasting and retries its original transaction after interruption.
+3. Fund the receiving address in `deployments/owl-paymaster.json`. A normal cell occupies 61 CKB; it needs extra capacity above that to pay fees. Several funding cells support simultaneous transactions. One cell can fund only one pending transaction at a time.
+4. Set `PILOT_PAYMASTER_PRIVATE_KEY` on the **server** to the key that owns the pool address, then run `npm run paymaster`. The service rejects a key/address mismatch and non-testnet RPCs. This is an operator-controlled ordinary secp pool, not trustless escrow.
+5. Build the demo with `VITE_PILOT_PAYMASTER_URL=https://api.example/api/paymaster`. Keep `poolLock` in the deployment configuration pinned to that same pool. Authorize fresh sponsored sessions; legacy locks cannot be upgraded in place.
+
+Never put either private key in a `VITE_` variable. Never commit deployment journals or service journals. No private key is needed in an integrating application's browser.
+
+Server defaults (amounts are integer shannons):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PILOT_PAYMASTER_RPC` | `https://testnet.ckb.dev` | Testnet node/indexer |
+| `PILOT_PAYMASTER_HOST` / `PORT` | `127.0.0.1` / `5182` | Bind behind HTTPS reverse proxy |
+| `PILOT_PAYMASTER_FILE` | `data/pilot-paymaster.json` | Persistent quotes, exact signed bytes, leases, spending totals |
+| `PILOT_PAYMASTER_MAX_FEE` | `100000` | Maximum network fee per transaction |
+| `PILOT_PAYMASTER_FEE_RATE` | `1000` | Shannons per 1,000 bytes; quote reserves 4 KiB for signing witnesses |
+| `PILOT_PAYMASTER_DAILY_BUDGET` | `100000000` | Global daily subsidy limit (1 CKB) |
+| `PILOT_PAYMASTER_OWNER_DAILY_BUDGET` | `1000000` | Daily subsidy per owner (0.01 CKB) |
+| `PILOT_PAYMASTER_ALLOWED_ORIGINS` | Local demo origins | Comma-separated browser origins |
+| `PILOT_PAYMASTER_ALLOWED_CODE_HASHES` | Known Pilot variants | Comma-separated eligible application hashes |
+| `PILOT_PAYMASTER_ALLOW_OWNER_TRANSACTIONS` | `true` in startup script | Also sponsor full-signature owner transactions, including username transfers; set `false` to disable |
+
+The 4 KiB witness reserve is charged as part of the quoted network fee, not refunded. Oversized signed witnesses are rejected rather than changing the signed transaction. Owners can inspect the final fee before signing; automatic actions remain bounded by their approved fee cap.
+
+Instances sharing a pool must share the same persistent journal and filesystem locks. Independent journals against the same pool are unsupported. Keep the journal across deployments: deleting it loses subsidy accounting, pool leases, and retry records. A hostile client can consume an open subsidy through valid transactions; owner/global budgets bound that spending. CORS is a browser control, not authentication or Sybil protection.
+
+## Integrate
+
+```ts
+import { ccc } from '@ckb-ccc/core';
+import { PilotPaymasterClient, PilotCounterConnector, CkbCounterAdapter } from '@owl/pilot';
+
+const poolLock = (await ccc.Address.fromString(owlPoolAddress, client)).script;
+const paymaster = new PilotPaymasterClient({
+  client, url: 'https://api.example/api/paymaster', poolLock, maxFee: 100_000n,
+});
+// manifest.policy.kind = 'counter-sponsored-v1'
+// manifest.policy.deployment = verified new sponsored-counter deployment
+// manifest.policy.poolLock = poolLock
+// manifest.policy.floorCapacity = '20000000000'
+const connector = new PilotCounterConnector(ownerSigner, manifest);
+const { cell, grant } = await connector.authorize(['counter.increment'], {
+  paymaster, sessionPublicKey,
+  onSigned: async (cell, bytes) => saveApproval({ cell, bytes }),
+});
+const adapter = await CkbCounterAdapter.create({
+  client, deployment: manifest.policy.deployment, paymaster,
+  sessionCell: cell, session, sessionPrivateKey, store: settlementStore,
+});
+```
+
+For reusable apps, use `policy.kind: 'delegation-sponsored-v1'`, its distinct deployment, and `policy.poolLock`. Pass `{ paymaster }` as the third `PilotConnector` constructor argument and include it in `PilotDelegationAdapter.create`. Pass `{ paymaster }` to `prepareOwnerAction` / `prepareDelegationRecovery`; their reviewed submission/resume paths persist quote metadata too. Set the session descriptor's `policyVersion` to the selected policy kind.
+
+`prepareCkbToUsername` and `prepareSporeToUsername` accept `{ sponsorship: true }` as their last argument. This builds a zero-user-fee transaction. Prepare the owner's witnesses, request a quote, verify/review the quoted transaction, owner-sign it, persist quote + exact signed bytes, then call `paymaster.submit`. Transfers still require the owner's explicit signature. The demo implements this sequence.
+
+## Contract guarantees and retry rules
+
+- Both new automatic policies require app input/output 0 and ordinary pool input/change 1, with exactly two inputs and outputs. App capacity and pool identity cannot change. Additional app payments or arbitrary multi-cell actions are not supported by these session policies.
+- Sponsored flight deducts its fixed virtual action charge from the on-chain allowance, without removing user capacity. The charge is the maximum permitted pool fee, not a deposited user balance.
+- Sponsored reusable delegation enforces the selected transition and per-transaction fee cap. Its cumulative allowance is an SDK journal limit; durable owner/global subsidy caps are service enforced. There is no cumulative per-session sponsorship counter or on-chain expiry in that contract.
+- Pool signatures are returned only after a successful node dry-run. The service durably saves signed bytes and a pool-input lease before broadcast. Unknown responses retry that original transaction, including after service restart.
+- Unsigned quotes do not lease cells. If an unsigned quote expires or loses its pool input, the service returns `409 REQUOTE`. Only this definitive response permits automatic adapters to discard the obsolete unsigned-pool transaction and prepare a new quote for the same action. Unknown errors retain exact bytes. Expired owner approvals need a fresh review/signature; do not discard an uncertain owner submission.
+- The pool must have spendable fee headroom and available cells, and the owner/global subsidy allowance must remain. A nonzero displayed balance alone is insufficient. Exhaustion, RPC failures, service failures, and stale quotes never enable a user-paid fallback.
+
+The docs pool-deposit form remains an explicit user-paid funding transfer with its fee displayed for review. Off-chain message actions have no CKB network fee. Mainnet activation, automatic refunds, pool management/consolidation, distributed database leasing, and sponsorship of arbitrary session transitions are not implemented.
+
+Validation: SDK/service accounting and retry tests, cryptographic pool signatures, independent CKB VM contract regressions, and existing browser/docs checks. No live sponsored testnet transaction has been executed by this change.

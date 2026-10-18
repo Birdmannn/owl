@@ -1,0 +1,11 @@
+{
+  "deployment": {
+    "network": "devnet",
+    "genesisHash": "0xb15fa8a50781f3a8bf84759682e2ce4027b7ae5361df45e8b68855ee413104be",
+    "codeHash": "0x8c8c113bd94b15da8c70e9c2f739fc462117c5b987963cb7f66dbcfe84bd2b4a",
+    "outPoint": {
+      "txHash": "0xb76cc8b9c88d975c2e84ac10b2b5ca0cb36b49b0d03db160b6038d445724a993",
+      "index": 0
+    }
+  }
+}
