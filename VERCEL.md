@@ -2,6 +2,21 @@
 
 The repository can serve the demo and all three APIs from one Vercel project. The sponsored contracts are already deployed on CKB testnet; the deployment outpoints are in `deployments/pilot-sponsored.json`.
 
+## Two Vercel projects from the same repository
+
+| Setting | Demo and backend | Docs and landing page |
+| --- | --- | --- |
+| Root Directory | Repository root; leave the directory field empty | `apps/docs` |
+| Framework | Other | Vite |
+| Install | `npm ci && npm ci --prefix packages/react && npm ci --prefix apps/demo` | `npm ci` |
+| Build | `npm run build --prefix apps/demo` | `npm run build` |
+| Output | `apps/demo/dist` | `dist` |
+| Configuration | Root `vercel.json` | `apps/docs/vercel.json` |
+
+Vercel may auto-select `apps/docs` when importing this repository. Set the Root Directory separately for each project. If both projects show the docs, clear `apps/docs` from the demo project's Root Directory, check its build/output overrides against the table, save, and redeploy. Root Directory is a Vercel project setting; repository configuration cannot change it for an already imported project.
+
+Keep source files outside the Root Directory available for the docs build, since it imports shared deployment/script metadata. Set its public `VITE_DEMO_URL` to the demo deployment and optionally `VITE_PILOT_SOCIAL_URL` to that deployment's `/api/social` endpoint.
+
 ## Project setup
 
 1. Import the GitHub repository into Vercel. Keep **Root Directory at the repository root**, not `apps/demo`.
