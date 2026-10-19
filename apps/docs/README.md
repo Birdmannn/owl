@@ -7,12 +7,12 @@ npm install --prefix apps/docs
 npm run dev --prefix apps/docs
 ```
 
-Open http://127.0.0.1:5175. Run the browser demo separately with `npm run dev --prefix apps/demo`; demo links default to http://127.0.0.1:5174.
+Open http://127.0.0.1:5175. Demo links open the [hosted Pilot demo](https://owl-pilot-demo.vercel.app) by default.
 
-Set `VITE_DEMO_URL` to the deployed demo URL when building or serving the docs. No public demo URL is assumed.
+To use a local demo instead, run `npm run dev --prefix apps/demo` and override `VITE_DEMO_URL` when building or serving the docs:
 
 ```sh
-VITE_DEMO_URL=https://your-demo.example npm run build --prefix apps/docs
+VITE_DEMO_URL=http://127.0.0.1:5174 npm run dev --prefix apps/docs
 npm run preview --prefix apps/docs
 ```
 

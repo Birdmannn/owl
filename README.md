@@ -47,7 +47,7 @@ The demo opens at `http://127.0.0.1:5174`; the docs open at `http://127.0.0.1:51
 
 The demo defaults to self-funded counter sessions and browser-local social state. To use a shared social backend or fee sponsorship, configure their public frontend URLs before starting or building the demo; see [OFFCHAIN_SIGNING.md](OFFCHAIN_SIGNING.md), [PAYMASTER.md](PAYMASTER.md), and [.env.example](.env.example). Root service scripts load the root `.env`; Vite frontend variables belong in the app’s environment or `apps/demo/.env`. Never expose server private keys through `VITE_` variables.
 
-For the docs site, set `VITE_DEMO_URL` to your deployed demo URL. The SDK’s `npm run demo` command runs a simulation; it does not launch either website.
+Docs demo links open the [hosted Pilot demo](https://owl-pilot-demo.vercel.app) by default. Set `VITE_DEMO_URL` when building or serving the docs to override that destination, for example `http://127.0.0.1:5174` for local development. The SDK’s `npm run demo` command runs a simulation; it does not launch either website.
 
 ## Off-chain social signing
 

@@ -2,7 +2,7 @@ import './style.css';
 import { pages } from './content.js';
 
 const owlUrl = `${import.meta.env.BASE_URL}owl.png`;
-const demoUrl = import.meta.env.VITE_DEMO_URL || 'http://127.0.0.1:5174';
+const demoUrl = import.meta.env.VITE_DEMO_URL || 'https://owl-pilot-demo.vercel.app';
 const main = document.querySelector('#main');
 const escape = (value) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const linkDemo = () => document.querySelectorAll('[data-demo]').forEach((a) => { a.href = demoUrl; });
