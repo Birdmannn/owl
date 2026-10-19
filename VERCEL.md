@@ -13,7 +13,9 @@ The repository can serve the demo and all three APIs from one Vercel project. Th
 | Output | `apps/demo/dist` | `dist` |
 | Configuration | Root `vercel.json` | `apps/docs/vercel.json` |
 
-Vercel may auto-select `apps/docs` when importing this repository. Set the Root Directory separately for each project. If both projects show the docs, clear `apps/docs` from the demo project's Root Directory, check its build/output overrides against the table, save, and redeploy. Root Directory is a Vercel project setting; repository configuration cannot change it for an already imported project.
+Vercel may auto-select **Services** as the Application Preset when it detects the demo, docs and Rust contracts. In that screen, Root Directory can already be `./` while the docs service is assigned the public `/` route and the demo is internal. That is a Services routing selection, not evidence that the project root is `apps/docs`. For the demo/backend deployment, keep Root Directory at `./`, change Application Preset from Services to **Other**, and use the root configuration above. Do not import `apps/demo` as a standalone subdirectory with the current setup, because the backend function lives in the repository-root `api` directory. The Rust contracts are deployed to CKB, not Vercel. For the docs project, choose **Import single project** on the docs entry, with Root Directory `apps/docs` and preset Vite.
+
+If a project actually has `apps/docs` as its Root Directory, change that setting separately for the demo and check its build/output overrides against the table, save, and redeploy. Root Directory is a Vercel project setting; repository configuration cannot change it for an already imported project.
 
 Keep source files outside the Root Directory available for the docs build, since it imports shared deployment/script metadata. Set its public `VITE_DEMO_URL` to the demo deployment and optionally `VITE_PILOT_SOCIAL_URL` to that deployment's `/api/social` endpoint.
 
