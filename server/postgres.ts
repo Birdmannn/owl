@@ -1,8 +1,12 @@
 import pg from 'pg';
 
+export function databaseUrl(environment: NodeJS.ProcessEnv = process.env): string | undefined {
+  return environment.DATABASE_URL ?? environment.POSTGRES_URL;
+}
+
 /** Small pools per warm function; use a pooled PostgreSQL URL on serverless hosts. */
 export function postgresPool(url: string) {
-  if (!/^postgres(ql)?:\/\//.test(url)) throw new Error('DATABASE_URL must be a PostgreSQL connection URL');
+  if (!/^postgres(ql)?:\/\//.test(url)) throw new Error('DATABASE_URL or POSTGRES_URL must be a PostgreSQL connection URL');
   const pool = new pg.Pool({ connectionString: url, max: 3, idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 5_000, allowExitOnIdle: true });
   // pg discards failed idle connections; keep provider errors (which may contain credentials) out of logs.

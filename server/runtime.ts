@@ -5,7 +5,7 @@ import { PostgresSocialStore, createSocialHandler } from './offchain-social.js';
 import { createPaymasterHandler } from './paymaster.js';
 import { paymasterFromEnvironment } from './paymaster-config.js';
 import { MemoryRateLimiter, PostgresRateLimiter, type RateLimiter } from './http.js';
-import { postgresPool } from './postgres.js';
+import { databaseUrl, postgresPool } from './postgres.js';
 import { socialManifest } from '../examples/offchain-social.js';
 import { validateOffchainManifest } from '../src/offchain.js';
 import type { PilotNetwork } from '../src/usernames.js';
@@ -13,8 +13,9 @@ import type { PilotNetwork } from '../src/usernames.js';
 let limiter: Promise<RateLimiter> | undefined;
 export function rateLimiterFromEnvironment(): Promise<RateLimiter> {
   if (!limiter) limiter = (async () => {
-    if (!process.env.DATABASE_URL) return new MemoryRateLimiter();
-    const value = new PostgresRateLimiter(postgresPool(process.env.DATABASE_URL));
+    const url = databaseUrl();
+    if (!url) return new MemoryRateLimiter();
+    const value = new PostgresRateLimiter(postgresPool(url));
     try { await value.init(); return value; }
     catch (error) { await value.pool.end(); throw error; }
   })().catch(error => { limiter = undefined; throw error; });
@@ -30,8 +31,8 @@ function origins(value: string | undefined, fallback: string) {
 export type PilotService = 'pilot' | 'social' | 'paymaster';
 /** Lazy per-service initialization: registry/social requests never require the pool key. */
 export async function serverlessHandler(service: PilotService): Promise<RequestListener> {
-  const database = process.env.DATABASE_URL;
-  if (!database) throw new Error('Serverless Pilot requires DATABASE_URL; JSON fallback is disabled');
+  const database = databaseUrl();
+  if (!database) throw new Error('Serverless Pilot requires DATABASE_URL or POSTGRES_URL; JSON fallback is disabled');
   const appOrigin = origin(process.env.PILOT_APP_ORIGIN);
   const rateLimiter = await rateLimiterFromEnvironment();
   if (service === 'pilot') {

@@ -32,3 +32,5 @@ Use a test database. This check was also run against an ephemeral local PostgreS
 ## Vercel deployment
 
 The exported handlers serve `/api/pilot`, `/api/social`, and `/api/paymaster` through `api/index.ts` without calling `listen()`. The committed root `vercel.json` builds the demo and rewrites API routes. PostgreSQL is required in serverless mode; no JSON fallback is allowed. See [VERCEL.md](../VERCEL.md) for required environment variables, verification, concurrency guarantees and data migration boundaries.
+
+The Vercel/Neon integration variable `POSTGRES_URL` is also accepted by every service. `DATABASE_URL` takes precedence when both are set; use the same pooled connection for all instances sharing a pool. Keep either variable server-only.

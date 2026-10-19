@@ -1,11 +1,12 @@
+import { databaseUrl } from '../server/postgres.js';
 import { rateLimiterFromEnvironment } from '../server/runtime.js';
 import { resolve } from 'node:path';
 import { JsonRegistryStore, PostgresRegistryStore } from '../server/registry-store.js';
 import { createRegistryServer } from '../server/registry.js';
 import type { PilotNetwork } from '../src/usernames.js';
 
-const url = process.env.DATABASE_URL;
-if (url && !/^postgres(ql)?:\/\//.test(url)) throw new Error('DATABASE_URL must be a PostgreSQL connection URL');
+const url = databaseUrl();
+if (url && !/^postgres(ql)?:\/\//.test(url)) throw new Error('DATABASE_URL or POSTGRES_URL must be a PostgreSQL connection URL');
 const store = url ? new PostgresRegistryStore(url) : new JsonRegistryStore(resolve(process.env.PILOT_REGISTRY_FILE ?? 'data/pilot-usernames.json'));
 const network = process.env.PILOT_REGISTRY_NETWORK ?? 'ckb-testnet';
 if (!['ckb-testnet', 'ckb-mainnet'].includes(network)) throw new Error('Invalid PILOT_REGISTRY_NETWORK');

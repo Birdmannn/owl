@@ -96,3 +96,5 @@ npm run build --prefix apps/demo
 The suite tests real PostgreSQL multi-instance competition, durable-before-broadcast writes, fee limits, rollback, social replay/revocation, shared rate limits, and the exported request adapter with Vercel-style parsed bodies. It does not publish a Vercel deployment or spend public pool funds.
 
 Vercel references: [Node.js request handlers](https://vercel.com/docs/functions/runtimes/node-js) and [project configuration](https://vercel.com/docs/project-configuration/vercel-json).
+
+The Vercel/Neon integration variable `POSTGRES_URL` is also accepted by every service. `DATABASE_URL` takes precedence when both are set; use the same pooled connection for all instances sharing a pool. Keep either variable server-only.

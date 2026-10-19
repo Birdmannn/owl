@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createVercelHandler } from '../server/vercel.js';
 import { createSocialHandler, JsonSocialStore } from '../server/offchain-social.js';
+import { databaseUrl } from '../server/postgres.js';
 import { readJson } from '../server/http.js';
 import { serverlessHandler } from '../server/runtime.js';
 import { ccc } from '@ckb-ccc/core';
@@ -65,13 +66,15 @@ test('Vercel cold-start failures are sanitized and retryable rather than caching
 });
 
 test('serverless requires PostgreSQL and explicit canonical origin; parsed request bodies retain byte limits', async () => {
+  const oldPostgres = process.env.POSTGRES_URL;
   const oldDatabase = process.env.DATABASE_URL, oldOrigin = process.env.PILOT_APP_ORIGIN;
   try {
-    delete process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL; delete process.env.POSTGRES_URL;
     await assert.rejects(serverlessHandler('pilot'), /requires DATABASE_URL/);
     process.env.DATABASE_URL = 'postgresql://unused'; delete process.env.PILOT_APP_ORIGIN;
     await assert.rejects(serverlessHandler('social'), /exact HTTPS/);
   } finally {
+    if (oldPostgres === undefined) delete process.env.POSTGRES_URL; else process.env.POSTGRES_URL = oldPostgres;
     if (oldDatabase === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldDatabase;
     if (oldOrigin === undefined) delete process.env.PILOT_APP_ORIGIN; else process.env.PILOT_APP_ORIGIN = oldOrigin;
   }
@@ -80,4 +83,11 @@ test('serverless requires PostgreSQL and explicit canonical origin; parsed reque
   assert.deepEqual(await readJson(request(Buffer.from('{"value":1}')), 100), { value: 1 });
   await assert.rejects(readJson(request({ text: '🦉'.repeat(30) }), 100), /too large/);
   await assert.rejects(readJson(request('{broken'), 100), SyntaxError);
+});
+
+test('database configuration accepts Vercel POSTGRES_URL with explicit DATABASE_URL precedence', () => {
+  assert.equal(databaseUrl({ POSTGRES_URL: 'postgresql://vercel' }), 'postgresql://vercel');
+  assert.equal(databaseUrl({ DATABASE_URL: 'postgresql://explicit', POSTGRES_URL: 'postgresql://vercel' }), 'postgresql://explicit');
+  assert.equal(databaseUrl({ DATABASE_URL: '', POSTGRES_URL: 'postgresql://vercel' }), '', 'explicit empty configuration must not silently select a different database');
+  assert.equal(databaseUrl({}), undefined);
 });

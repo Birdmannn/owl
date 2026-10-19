@@ -122,10 +122,10 @@ test('real serverless runtime initializes PostgreSQL registry/social handlers wi
   const { createVercelHandler } = await import('../server/vercel.js');
   const { rateLimiterFromEnvironment } = await import('../server/runtime.js');
   const url = await database(t), audience = 'https://hosted.pilot.test';
-  const names = ['DATABASE_URL', 'PILOT_APP_ORIGIN', 'PILOT_PAYMASTER_PRIVATE_KEY', 'PILOT_SOCIAL_AUDIENCE', 'PILOT_REGISTRY_ORIGIN', 'PILOT_REGISTRY_ALLOWED_ORIGINS'];
+  const names = ['DATABASE_URL', 'POSTGRES_URL', 'PILOT_APP_ORIGIN', 'PILOT_PAYMASTER_PRIVATE_KEY', 'PILOT_SOCIAL_AUDIENCE', 'PILOT_REGISTRY_ORIGIN', 'PILOT_REGISTRY_ALLOWED_ORIGINS'];
   const saved = new Map(names.map(name => [name, process.env[name]]));
   for (const name of names) delete process.env[name];
-  process.env.DATABASE_URL = url; process.env.PILOT_APP_ORIGIN = audience;
+  process.env.POSTGRES_URL = url; process.env.PILOT_APP_ORIGIN = audience;
   const server = createServer(createVercelHandler());
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {

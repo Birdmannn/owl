@@ -1,3 +1,4 @@
+import { databaseUrl } from './postgres.js';
 import { resolve } from 'node:path';
 import { ccc } from '@ckb-ccc/core';
 import { PaymasterStore, PostgresPaymasterStore, PilotPaymaster } from './paymaster.js';
@@ -15,8 +16,9 @@ export async function paymasterFromEnvironment() {
   const address = process.env.PILOT_PAYMASTER_ADDRESS ?? deployment.address;
   const pool = await ccc.Address.fromString(address, client);
   if (!(await signer.getRecommendedAddressObj()).script.eq(pool.script)) throw new Error('Pool signing key does not match configured pool address');
-  const store = process.env.DATABASE_URL
-    ? new PostgresPaymasterStore(process.env.DATABASE_URL, pool.script.hash())
+  const url = databaseUrl();
+  const store = url
+    ? new PostgresPaymasterStore(url, pool.script.hash())
     : new PaymasterStore(resolve(process.env.PILOT_PAYMASTER_FILE ?? 'data/pilot-paymaster.json'));
   try {
     const paymaster = await PilotPaymaster.create({ signer, store,
