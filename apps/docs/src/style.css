@@ -35,3 +35,5 @@ p code,pre,table{font-size:13.75px}
   .ecosystem-banner p{font-size:12.5px}
   .deposit-review dl>div{font-size:13.75px}
 }
+
+.github-link{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:40px;height:40px;border-radius:5px;color:var(--muted)}.github-link:hover{color:var(--dark);background:#eef0e8}
