@@ -1,6 +1,6 @@
 import { ccc } from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { revokeCounter, type SponsorQuote, type CounterTransactionEvent, SponsorQuoteRejectedError, PilotPaymasterClient, Pilot, LocalStorageStore, CkbCounterAdapter, PilotCounterConnector, createCounterGrant, assertCounterPermission, decodeCounterData, type PilotGrant, type Session, type SessionCell, type SettlementJournal, type CounterState, type CounterAction, type PilotEvent, type Deployment } from '@owl/pilot';
+import { revokeCounter, type SponsorQuote, type CounterTransactionEvent, SponsorQuoteRejectedError, PilotPaymasterClient, Pilot, LocalStorageStore, CkbCounterAdapter, PilotCounterConnector, createCounterGrant, assertCounterPermission, decodeCounterData, type PilotManifest, withPilotBudget, type PilotGrant, type Session, type SessionCell, type SettlementJournal, type CounterState, type CounterAction, type PilotEvent, type Deployment } from '@owl/pilot';
 import { updateActivity, transactionObserver, logFailure, recordQueue, recordPilotEvent, recoverActivity } from './activity';
 import { flightManifest, sponsorshipRequested, sponsorshipReady } from './manifest';
 import { readProfile } from './profile';
@@ -14,29 +14,33 @@ export function getPaymaster(client: ccc.Client): PilotPaymasterClient | undefin
 export const fee = 100_000n;
 export const budget = fee * 20n;
 export const amount = (n: bigint) => (Number(n) / 100_000_000).toLocaleString('en', { maximumFractionDigits: 5 });
-export interface SavedSession { session: Session; privateKey: ccc.Hex; ownerTransaction?: ccc.Hex; cell?: SessionCell; grant?: PilotGrant }
+export interface SavedSession { manifest?: PilotManifest; session: Session; privateKey: ccc.Hex; ownerTransaction?: ccc.Hex; cell?: SessionCell; grant?: PilotGrant }
 export interface Runtime { pilot: Pilot<CounterState, CounterAction>; adapter: CkbCounterAdapter; saved: SavedSession; key: string; receipts: string[] }
 export const sessionKey = (address: string) => `pilot-demo:v1:${deployment.codeHash}:${address}`;
 export function readSession(key: string): SavedSession | undefined { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : undefined; }
-export async function authorize(signer: ccc.Signer, key: string, selected: readonly string[]): Promise<SavedSession> {
+export async function authorize(signer: ccc.Signer, key: string, selected: readonly string[], selectedBudget = flightManifest.policy.budget): Promise<SavedSession> {
   if (sponsorshipRequested && !sponsorshipReady) throw new Error('Sponsored counter deployment missing; no user-paid fallback');
   const paymaster = getPaymaster(signer.client);
-  const grant=createCounterGrant(flightManifest,selected);
+  const manifest=withPilotBudget(flightManifest,selectedBudget);
+  const grant=createCounterGrant(manifest,selected);
   if(readSession(key)?.cell)throw new Error('A funded session already exists. Resume it or reclaim its capacity before authorizing another.');
   const address=await signer.getRecommendedAddress();
   if(key!==sessionKey(address)||!readProfile(address))throw new Error('Connect your owner wallet and create a Pilot profile first.');
   const privateKey = ccc.hexFrom(secp256k1.utils.randomSecretKey());
-  const saved: SavedSession = { privateKey, grant, session: { id: crypto.randomUUID(), network: 'ckb-testnet', policyVersion: flightManifest.policy.kind, expiresAt: Date.now() + 24 * 60 * 60 * 1000 } };
+  const saved: SavedSession = { manifest, privateKey, grant, session: { id: crypto.randomUUID(), network: 'ckb-testnet', policyVersion: flightManifest.policy.kind, expiresAt: Date.now() + 24 * 60 * 60 * 1000 } };
   localStorage.setItem(key, JSON.stringify(saved));
   const id = `${saved.session.id}:authorization`;
-  updateActivity(key, id, { sessionId: saved.session.id, kind: 'authorization', title: 'Session approval', status: 'signing' }, { phase: 'created', message: paymaster ? 'Opening a sponsored session: 200 CKB recoverable capacity; pool pays network fees; 0.02 CKB virtual allowance is not locked from user funds.' : 'Opening a session with 150 CKB recoverable capacity and a 0.02 CKB move budget.' });
-  try { const result = await new PilotCounterConnector(signer, flightManifest).authorize(selected, { paymaster, sessionPublicKey: secp256k1.getPublicKey(ccc.bytesFrom(privateKey), true), onTransaction: transactionObserver(key, id, { sessionId: saved.session.id, kind: 'authorization', title: 'Session approval' }), onSigned: async (cell, bytes) => { saved.cell = cell; saved.ownerTransaction = bytes; localStorage.setItem(key, JSON.stringify(saved)); }, onSubmitted: async cell => { saved.cell = cell; localStorage.setItem(key, JSON.stringify(saved)); } }); saved.cell=result.cell; } catch (error) { if (error instanceof SponsorQuoteRejectedError && saved.cell?.authorizationQuote?.id === error.quoteId) { delete saved.cell; delete saved.ownerTransaction; localStorage.setItem(key, JSON.stringify(saved)); } logFailure(key, id, error, saved.cell ? 'retry' : 'failed'); throw error; }
+  updateActivity(key, id, { sessionId: saved.session.id, kind: 'authorization', title: 'Session approval', status: 'signing' }, { phase: 'created', message: `Opening a session with ${amount(BigInt(manifest.policy.floorCapacity))} CKB recoverable capacity and ${amount(BigInt(manifest.policy.budget))} CKB ${paymaster ? 'sponsored allowance (not deposited); pool pays network fees' : 'fee budget'}.` });
+  try { const result = await new PilotCounterConnector(signer, manifest).authorize(selected, { paymaster, sessionPublicKey: secp256k1.getPublicKey(ccc.bytesFrom(privateKey), true), onTransaction: transactionObserver(key, id, { sessionId: saved.session.id, kind: 'authorization', title: 'Session approval' }), onSigned: async (cell, bytes) => { saved.cell = cell; saved.ownerTransaction = bytes; localStorage.setItem(key, JSON.stringify(saved)); }, onSubmitted: async cell => { saved.cell = cell; localStorage.setItem(key, JSON.stringify(saved)); } }); saved.cell=result.cell; } catch (error) { if (error instanceof SponsorQuoteRejectedError && saved.cell?.authorizationQuote?.id === error.quoteId) { delete saved.cell; delete saved.ownerTransaction; localStorage.setItem(key, JSON.stringify(saved)); } logFailure(key, id, error, saved.cell ? 'retry' : 'failed'); throw error; }
   localStorage.setItem(key, JSON.stringify(saved));
   return saved;
 }
 export async function restore(client: ccc.Client, key: string, saved: SavedSession, onEvent: (event: PilotEvent) => void): Promise<Runtime> {
   if (sponsorshipRequested && !sponsorshipReady) throw new Error('Sponsored counter deployment missing; no user-paid fallback');
   const paymaster = getPaymaster(client);
+  const manifest=withPilotBudget(flightManifest,saved.manifest?.policy.budget??flightManifest.policy.budget);
+  if (!saved.grant) throw new Error('No saved permission grant');
+  assertCounterPermission(manifest,saved.grant,'counter.increment');
   if (!saved.cell) throw new Error('Approval was not submitted. You can start a new session.');
   if (saved.ownerTransaction) {
     let tx = ccc.Transaction.fromBytes(saved.ownerTransaction);
@@ -69,7 +73,7 @@ export async function restore(client: ccc.Client, key: string, saved: SavedSessi
   const adapter = await CkbCounterAdapter.create({ client, paymaster, deployment, sessionCell: saved.cell, session: saved.session, sessionPrivateKey: saved.privateKey,
     onTransaction: transactionObserver(key, '', { sessionId: saved.session.id, kind: 'move' }),
     store: { async load() { const raw = localStorage.getItem(`${prefix}:chain`); return raw ? JSON.parse(raw) as SettlementJournal : undefined; }, async save(journal) { localStorage.setItem(`${prefix}:chain`, JSON.stringify(journal)); } } });
-  const pilot = await Pilot.create({ session: saved.session, state: { position: 0 }, budget, adapter, store: { async load() { const journal = await pilotStore.load(); if (journal) recordQueue(key, journal, true); return journal; }, async save(journal) { await pilotStore.save(journal); recordQueue(key, journal); } }, autoSettle: false, onEvent: event => { recordPilotEvent(key, event); onEvent(event); } });
+  const pilot = await Pilot.create({ session: saved.session, state: { position: 0 }, budget: BigInt(manifest.policy.budget), adapter, store: { async load() { const journal = await pilotStore.load(); if (journal) recordQueue(key, journal, true); return journal; }, async save(journal) { await pilotStore.save(journal); recordQueue(key, journal); } }, autoSettle: false, onEvent: event => { recordPilotEvent(key, event); onEvent(event); } });
   const journal = JSON.parse(localStorage.getItem(`${prefix}:chain`) ?? '{}') as Partial<SettlementJournal>;
   const receipts = Object.values(journal.transactions ?? {}).filter(record => record.confirmed).map(record => record.hash).reverse();
   return { pilot, adapter, saved, key, receipts };

@@ -43,6 +43,8 @@ test('real wallet proof registers, resolves and survives server/store restart; r
     assert.equal((await f.post('/usernames',{challengeId:challenge.id,signature})).status,409);
     await assert.rejects(f.client.register(wallet('22'),'owl_registry'),/already/);
     await assert.rejects(f.client.register(signer,'second_name'),/already/);
+    signer.signMessage=async()=>{throw new Error('An existing name must not require another signature');};
+    assert.equal((await f.client.register(signer,'@OWL_REGISTRY')).username,'owl_registry');
     await assert.rejects(f.client.resolve('owl_registry','ckb-mainnet'),/different/);
     const second=new JsonRegistryStore(f.store.file);await second.init();assert.equal((await second.get('owl_registry'))?.ownerAddress,ownerAddress);
     const contents=await readFile(f.store.file,'utf8');assert.ok(!contents.includes('privateKey'));assert.ok(!contents.includes('signature'));

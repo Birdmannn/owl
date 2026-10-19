@@ -41,7 +41,14 @@ export class PilotUsernameClient {
     return result.profile;
   }
   async register(signer: ccc.Signer, username: string): Promise<PilotUsername> {
-    const claim = { username: normalizeUsername(username), ownerAddress: await signer.getRecommendedAddress(),
+    const name = normalizeUsername(username);
+    const ownerAddress = await signer.getRecommendedAddress();
+    const existing = await this.findByAddress(ownerAddress);
+    if (existing) {
+      if (existing.username !== name) throw new Error('This address already has a Pilot username. Renaming is not supported.');
+      return existing;
+    }
+    const claim = { username: name, ownerAddress,
       signType: signer.signType, identity: await signer.getIdentity() };
     const challenge = await this.request<{ id: string; message: string }>('/challenges', claim);
     const signature = await signer.signMessage(challenge.message);

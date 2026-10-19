@@ -15,6 +15,9 @@ test('developer manifest renders independent named permissions and declining cre
   await panel.getByRole('button', { name: 'Connect through Pilot' }).click();
   const dialog = page.getByRole('dialog', { name: 'Sign these on my behalf' });
   await expect(dialog.getByRole('checkbox')).toHaveCount(2);
+  await dialog.getByRole('spinbutton',{name:'Your action budget'}).fill('7');
+  await dialog.getByText('Inspect app manifest',{exact:true}).click();
+  await expect(dialog.locator('.manifest-details pre')).toContainText('"budget": "700000"');
   const forward = dialog.getByRole('checkbox', { name: /Move forward/ });
   const backward = dialog.getByRole('checkbox', { name: /Move backward/ });
   await expect(forward).not.toBeChecked(); await expect(backward).not.toBeChecked();

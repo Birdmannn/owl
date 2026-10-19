@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { injectWallet } from './wallet-fixture';
 import { connectThroughPilot, createProfile } from './pilot-flow';
 test('Pilot wraps owner connection, creates a profile, and requires explicit permission selection', async ({page,context})=>{
-  await injectWallet(context);await page.goto('/');
+  const wallet=await injectWallet(context);await page.goto('/');
   await expect(page.getByRole('button',{name:'Fly forward'})).toBeDisabled();
   await connectThroughPilot(page);
   await page.getByRole('textbox',{name:'Username',exact:true}).fill('!!');
@@ -20,6 +20,14 @@ test('Pilot wraps owner connection, creates a profile, and requires explicit per
   await dialog.getByText('Inspect app manifest',{exact:true}).click();
   await expect(dialog.locator('.manifest-details pre')).toContainText('counter.increment');
   await expect(dialog.locator('.manifest-details pre')).toContainText('2000000');
+  const allowance=dialog.getByRole('spinbutton',{name:'Your action budget'});
+  await allowance.fill('5');
+  await expect(dialog.locator('.manifest-details pre')).toContainText('"budget": "500000"');
+  await dialog.getByRole('checkbox',{name:/Fly forward/}).check();
+  await expect(approve).toBeEnabled();
+  await allowance.fill('21');await expect(approve).toBeDisabled();
+  await allowance.fill('0');await expect(approve).toBeDisabled();
+  await allowance.fill('5');await expect(approve).toBeEnabled();
   await page.screenshot({path:'test-results/pilot-permissions.png',fullPage:true});
   await page.getByRole('button',{name:'Close Pilot'}).click();
   await expect(page.getByRole('button',{name:'Fly forward'})).toBeDisabled();
@@ -33,9 +41,9 @@ test('Pilot wraps owner connection, creates a profile, and requires explicit per
   await page.getByRole('button',{name:'Open Pilot'}).click();
   await page.getByRole('button',{name:'Disconnect owner wallet'}).click();
   await expect(page.getByRole('button',{name:'Connect wallet'}).first()).toBeVisible();
-  await connectThroughPilot(page);
-  await expect(page.getByRole('button',{name:'Continue as @owl_pilot'})).toBeVisible();
-  await page.getByRole('button',{name:'Continue as @owl_pilot'}).click();
+  await connectThroughPilot(page,true);
+  expect(wallet.messageSignatures).toBe(1);
+  await expect(page.getByRole('textbox',{name:'Username',exact:true})).toHaveCount(0);
   await expect(page.getByRole('dialog',{name:'Sign these on my behalf'})).toBeVisible();
 });
 test('Pilot modal and demo fit a mobile viewport',async({page,context})=>{
@@ -73,4 +81,18 @@ test('profile activity lists on-chain actions live, distinguishes queued/confirm
   await page.reload(); await page.getByRole('button', { name: 'Open Pilot' }).click();
   await page.getByRole('dialog').getByText('Activity & logs (2)', { exact: true }).click();
   await expect(page.getByRole('dialog').locator('.pilot-action-history > ol > li')).toHaveCount(2);
+});
+
+test('a failed address lookup offers retry instead of treating the address as unregistered',async({page,context})=>{
+  await injectWallet(context);
+  let fail=true;
+  await context.route('**/api/pilot/accounts/**',async route=>{
+    if(fail)await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Username lookup unavailable'})});
+    else await route.fallback();
+  });
+  await page.goto('/');await connectThroughPilot(page);
+  await expect(page.getByRole('button',{name:'Create Pilot profile'})).toHaveCount(0);
+  await expect(page.getByText('Username lookup unavailable',{exact:true})).toBeVisible();
+  fail=false;await page.getByRole('button',{name:'Retry username lookup'}).click();
+  await expect(page.getByRole('button',{name:'Create Pilot profile'})).toBeVisible();
 });

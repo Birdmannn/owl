@@ -2,7 +2,7 @@
 
 **Owl's Pilot** is a session SDK for CKB apps: approve a bounded session once, then interact instantly while transactions settle in the background.
 
-Pilot includes an optimistic engine, the public-testnet counter integration, and a reusable cell-delegation lock with a developer setup API. Developers register named actions, state codecs, and transaction builders; users choose permissions and explicitly create or migrate one app cell. `npm run demo` remains a simulation; `npm run ckb` and `npm run delegation` submit real CKB transactions. Connecting an ordinary wallet alone does not grant a session key permission to spend its cells. This remains a bounded testnet/devnet prototype.
+Pilot includes an optimistic engine, the public-testnet counter integration, and a reusable cell-delegation lock with a developer setup API. Developers register named actions, state codecs, and transaction builders; users choose permissions and a budget, then explicitly create or migrate one app cell. Compatible sponsored policies can use Owl’s paymaster for network fees; scoped off-chain grants support actions without CKB transactions. `npm run demo` remains a simulation; `npm run ckb` and `npm run delegation` can submit real CKB transactions. Connecting an ordinary wallet alone does not grant a session key permission to spend its cells. This remains a bounded testnet/devnet prototype.
 
 ## Install into your app
 
@@ -16,7 +16,7 @@ The installer automatically includes the SDK, React 19 modal, and CCC wallet con
 
 Keep the checkout available for future installs. To update, pull your chosen revision there and re-run the installer. It refreshes the installed Pilot package copies even when their version is unchanged. The installer sets CCC core to `1.23.0` and `install-links=true` in your app’s `.npmrc`; commit that file and your app’s lockfile. In CI, restore and build the same Pilot revision before installing app dependencies. Wallet connection and app integration are described in the website Quickstart; the installer does not start services or edit app source.
 
-## Run
+## Run the SDK example
 
 ```sh
 npm install
@@ -24,17 +24,42 @@ npm run check
 npm run demo
 ```
 
+## Run the browser demo and docs
+
+Install the repository dependencies once:
+
+```sh
+npm ci
+npm ci --prefix packages/react
+npm ci --prefix apps/demo
+npm ci --prefix apps/docs
+```
+
+Run each service in its own terminal from the repository root:
+
+```sh
+npm run registry
+npm run dev --prefix apps/demo
+npm run dev --prefix apps/docs
+```
+
+The demo opens at `http://127.0.0.1:5174`; the docs open at `http://127.0.0.1:5175`. The demo proxies username requests to the local Pilot service on port 5180. No local CKB node is needed for the browser’s testnet flow. Wallet registration requires a signed proof; on-chain sessions also require test CKB for their cell capacity and any user-paid fees.
+
+The demo defaults to self-funded counter sessions and browser-local social state. To use a shared social backend or fee sponsorship, configure their public frontend URLs before starting or building the demo; see [OFFCHAIN_SIGNING.md](OFFCHAIN_SIGNING.md), [PAYMASTER.md](PAYMASTER.md), and [.env.example](.env.example). Root service scripts load the root `.env`; Vite frontend variables belong in the app’s environment or `apps/demo/.env`. Never expose server private keys through `VITE_` variables.
+
+For the docs site, set `VITE_DEMO_URL` to your deployed demo URL. The SDK’s `npm run demo` command runs a simulation; it does not launch either website.
+
 ## Off-chain social signing
 
 Pilot also supports scoped message delegation for likes, follows, posts, and other app-defined off-chain actions. The owner signs a grant once; `PilotOffchainSession` signs selected actions with a separate key. The receiving app verifies owner and session proofs and atomically enforces replay protection, revocation, and business rules. No CKB transaction or fee budget is required for these messages.
 
-The demo’s **Pilot Social** panel works in explicitly labelled browser-local mode on a static HTTPS host. For shared state, an optional persistent Node verifier is included via `npm run social`; configure its audience and set `VITE_PILOT_SOCIAL_URL` before building. See [OFFCHAIN_SIGNING.md](OFFCHAIN_SIGNING.md) for APIs, diagrams, hosting, and verification limits, and the website’s **Off-chain signing** page. A reviewable community issue draft is in [CATALYST_FEEDBACK.md](CATALYST_FEEDBACK.md).
+The demo’s **Pilot Social** panel works in explicitly labelled browser-local mode on a static HTTPS host. For shared state, use the included persistent verifier through `npm run social` or the Vercel `/api/social` handler; configure its exact app audience and set `VITE_PILOT_SOCIAL_URL` before building. An unavailable configured backend does not silently fall back to browser-local acceptance. See [OFFCHAIN_SIGNING.md](OFFCHAIN_SIGNING.md) for APIs, diagrams, hosting, and verification limits, and the website’s **Off-chain signing** page.
 
 ## Set up your app for cell delegation
 
 Use `definePilotApp()` to supply a version-2 `PilotAppManifest`, `encodeState()`/`decodeState()`, and one `validate()`/`apply()`/`buildTransaction()` builder per named action. The manifest specifies human-readable names, operation labels, optional app type-script identity and cell dependency, cell-selection rules, transitions, deployment, and fee/capacity limits. See the complete [developer example](examples/cell-delegation.ts), [implementation guide](CELL_DELEGATION.md), and the website’s **Cell delegation** page.
 
-`PilotConnector.prepareDelegation()` builds a review for a new app cell or an explicitly selected owner-locked cell. `authorize()` requests the owner signature only after review and persists signed bytes before broadcast. Empty selection stays connected without funding. The reusable lock commits the chosen subset and enforces it on-chain; an owner-only action cannot enter a grant. Unsupported migrations fail the signed dry-run rather than bypassing app rules.
+`PilotConnector.prepareDelegation()` builds a review for a new app cell or an explicitly selected owner-locked cell. `authorize()` requests the owner signature only after review and persists signed bytes before broadcast. Empty selection stays connected without funding. The reusable lock commits the chosen subset and enforces it on-chain; an owner-only action cannot enter a grant. The selected app’s type script must allow migration and recovery; Pilot cannot bypass its rules. Preparation and transaction validation reject incompatible effects, and the app script still validates any submitted transaction.
 
 `PilotDelegationAdapter` routes `{ id, params }` actions to the registered builders and independently checks their effects before session signing. The current lock supports fixed increments/decrements of a declared u64 field, preserving all other data, the app type script, the lock, and protected capacity. It does not support arbitrary multi-cell or NFT transitions. The SDK also provides reviewed owner-signed actions, confirmed-state reconciliation, and recovery that preserves app state and returns ownership.
 
@@ -46,15 +71,27 @@ npm run contracts:build
 npm run delegation -- verify devnet
 ```
 
-The verifier uses generated, ignored test keys and local faucet funds. Public evidence is in [the devnet proof](deployments/cell-delegation-devnet-proof.json). The browser demo includes a **Developer cell delegation** panel with selectable actions, explicit creation/migration, an owner-only jump, recovery, and detailed logs. It needs a real public testnet deployment JSON; one is not configured by default. The existing flight demo keeps its deployed counter policy.
+The verifier uses generated, ignored test keys and local faucet funds. Public evidence is in [the devnet proof](deployments/cell-delegation-devnet-proof.json). The browser demo includes a **Developer cell delegation** panel with selectable actions, explicit creation/migration, an owner-only jump, recovery, and detailed logs. Without sponsorship, its deployment comes from [deployments/cell-delegation.json](deployments/cell-delegation.json), whose deployment is currently unset; load a compatible public testnet deployment JSON in the panel. When `VITE_PILOT_PAYMASTER_URL` is set, the panel uses the sponsored delegation deployment and pinned pool in [deployments/pilot-sponsored.json](deployments/pilot-sponsored.json). The flight demo likewise switches from its configured self-funded counter deployment to the sponsored counter deployment. Missing sponsored configuration blocks the flow instead of falling back to user-paid fees.
+
+## User-selected budgets and usernames
+
+Before session approval, users can set **Your action budget** in the Pilot modal. Both demo integrations default to 20 actions and allow a smaller whole-number allowance. The review shows the resulting budget, per-action cost, and separate recoverable cell capacity. The approved budget is saved with the session and restored after reload; changing an active budget requires ending that session and approving a new one.
+
+For self-funded sessions, the selected fee budget is funded in the session cell. Sponsored sessions use an action allowance without depositing a user fee budget; the pool pays eligible network fees. Counter allowances are recorded in cell data. Sponsored reusable-delegation allowances are enforced by the SDK journal, rather than an on-chain action counter; retain the journal and recover the cell to end its authority.
+
+Integrators use `withPilotBudget(baseManifest, budgetInShannons)` to derive a manifest within the app’s maximum. Pass that manifest to both the modal and connector, and persist it with the session for grant checks, adapters, and recovery. Set `PilotModal`’s `onBudgetChange` callback and original `budgetLimit` to enable the control. Without the callback, the modal displays a fixed app budget.
+
+Each connected address has **one username** within the Pilot service. On connection and account switching, look up the address with `PilotUsernameClient.findByAddress()`: reuse its existing name without a registration signature, or offer profile creation if no name exists. Both storage backends enforce uniqueness. Calling `register()` with the address’s existing name reuses its record; a different name is rejected. Username lookup does not grant signing authority.
+
+While resolving the address, pass `profileLoading` to the modal. If lookup fails, use `profileLookupError` and `onRetryProfile` to offer retry instead of treating the address as unregistered.
 
 ## End to end: what happens behind the scenes
 
-These diagrams describe the current browser demo and its `counter-v1` policy. The owner wallet controls the funds. Pilot generates a separate session key, and the CKB contract limits what that key can sign. The demo stores this key locally in the browser; it is not an isolated production key vault.
+These diagrams describe the browser demo’s self-funded `counter-v1` flow. Sponsored variants preserve user capacity and use a separate pool input/change to pay eligible fees; their allowances and requirements are described above and under [Pool-paid network fees](#pool-paid-network-fees). The owner wallet controls the funds. Pilot generates a separate session key, and the CKB contract limits what that key can sign. The demo stores this key locally in the browser; it is not an isolated production key vault.
 
 ### 1. Connect, choose permissions, and fund the session
 
-Clicking **Connect wallet** opens Pilot, which uses CCC to connect the existing owner wallet. The user creates or resumes a Pilot username, reviews their balance and the app manifest, and explicitly selects the supported action. A new username requires a separate wallet-signed ownership proof; it does not authorize spending.
+Clicking **Connect wallet** opens Pilot, which uses CCC to connect the existing owner wallet. Pilot looks up the connected address and reuses its username automatically, or asks the user to register one if none exists. The user reviews their balance and the app manifest, selects the supported action, and chooses their action budget. A new username requires a separate wallet-signed ownership proof; it does not authorize spending.
 
 Pilot then persists a session key and requests one owner signature for the funding transaction. The session becomes usable after that transaction confirms. The owner's private key stays in their existing wallet.
 
@@ -62,26 +99,30 @@ Pilot then persists a session key and requests one owner signature for the fundi
 flowchart TD
     U[User clicks Connect wallet] --> M[Pilot modal]
     M --> W[CCC connects existing owner wallet]
-    W --> P[Create or resume Pilot username]
-    P --> R[Review balance, manifest, and funding amount]
+    W --> P{Does this address have a username?}
+    P -->|Yes| E[Reuse registered username]
+    P -->|No| N[Register username with wallet proof]
+    E --> R[Review balance, manifest, budget, and funding amount]
+    N --> R
     R --> A[Select allowed action and approve session]
     A --> K[App generates and persists a session key]
     K --> S[Owner wallet signs funding transaction]
-    S --> T[Broadcast to CKB and persist submitted setup]
+    S --> J[Persist exact signed setup bytes]
+    J --> T[Broadcast saved transaction to CKB]
     T --> C[Wait for on-chain confirmation]
     C --> F[Restricted session cell is ready]
     F --> L[Lock binds owner identity, session public key, fee cap, and protected capacity]
     F --> D[Cell data holds remaining fee budget and counter position]
 ```
 
-The browser demo funds **150.02 test CKB**, plus a separate setup transaction fee:
+With sponsorship disabled and the default 20-action budget, the browser demo funds **150.02 test CKB**, plus a separate setup transaction fee:
 
 | Portion | Purpose | What happens to it |
 | --- | --- | --- |
 | 150 CKB | Protected capacity that holds the session cell | The session key cannot spend this portion; the owner can recover it. |
 | 0.02 CKB | Fee budget for 20 moves at 0.001 CKB each | Each confirmed move deducts its fee; unused budget remains recoverable. |
 
-These amounts are the demo's configuration, not universal SDK requirements. Funds are held in the user's contract-restricted cell, not a pooled Owl account. Other wallet funds remain outside the session key's authority.
+These are the demo’s default amounts; a smaller chosen budget reduces the fee portion. They are not universal SDK requirements. Funds are held in the user's contract-restricted cell, not a pooled Owl account. Other wallet funds remain outside the session key's authority.
 
 ### 2. Accept instantly, sign and settle in the background
 
@@ -133,7 +174,7 @@ The contract rejects extra payments, other actions, changed locks, invalid signa
 
 Optimistic acceptance and on-chain confirmation are separate. A timeout retains the queue and fee reservation while Pilot checks the saved transaction and, when appropriate, resends the same signed bytes. A definitive settlement failure rolls back the failed action and its dependent actions to the last confirmed state.
 
-To end the session, first resolve pending settlement. The owner signs a recovery transaction using the current session cell and an ordinary owner-wallet cell. Recovery returns the session's remaining capacity to the owner wallet; the owner pays a separate recovery fee. Consuming that session cell removes the session key's authority over it.
+To end the session, first resolve pending settlement. The owner signs a recovery transaction using the current session cell and an ordinary owner-wallet cell. In this self-funded counter flow, recovery returns the session’s remaining capacity intact, and the ordinary owner-wallet input covers the separate recovery fee. Compatible sponsored recovery charges that network fee to the pool. Consuming that session cell removes the session key's authority over it.
 
 ```mermaid
 flowchart TD
@@ -161,7 +202,7 @@ Exhausting the budget stops new automatic moves; it does not consume the protect
 2. An adapter prevalidates each against projected state, session policy, and unreserved budget.
 3. `pilot.readiness(moveId).ready` becomes true only for an allowed, affordable action at the current state revision.
 4. `pilot.execute(moveId)` reserves budget and durably saves the action before exposing its optimistic state. It does not wait for wallet approval or chain confirmation.
-5. Pilot settles queued actions sequentially through the adapter. Each production action still becomes a CKB transaction.
+5. Pilot settles queued actions sequentially through the adapter. Each on-chain action becomes its own CKB transaction; off-chain actions instead receive acceptance from the receiving app.
 6. After accepting an action, the app prepares the next possibilities again. These are alternative next actions, not a ten-level search tree.
 
 Use `pilot.state` to render the optimistic app state. `confirmedState`, events, and `queueLength` are available for reconciliation and diagnostics; a pending badge per move is not required. Local acceptance is not a guarantee of chain settlement.
@@ -189,17 +230,17 @@ The core checks local session expiration at acceptance. The adapter must reconci
 
 ## Storage and concurrency
 
-`MemoryStore` is for tests and demos. `LocalStorageStore` persists a journal across browser reloads. Use one live Pilot instance per storage key; multiple tabs require an exclusive lease or transactional store, which is not implemented here. A store must atomically replace its journal, leaving the prior record intact on failure. Restored journals are trusted local data, not cryptographic authorization.
+`MemoryStore` is for tests and demos. `LocalStorageStore` persists a journal across browser reloads. Use one live Pilot instance per storage key; multiple tabs require an exclusive lease or transactional store. The browser demo uses Web Locks for sessions and owner operations; the core engine does not coordinate independent instances by itself. A store must atomically replace its journal, leaving the prior record intact on failure. Restored journals are trusted local data, not cryptographic authorization.
 
-Actions reserve budget serially, preventing two rapid clicks from spending the same allowance. Settlement is sequential. Chains of unconfirmed CKB transactions, transaction batching, authoritative external state reconciliation, and parallel budgets are future adapter/protocol work. The counter adapter persists exact signed transaction bytes before broadcasting and checks confirmed chain receipts on retries.
+Actions reserve budget serially, preventing two rapid clicks from spending the same allowance. Settlement is sequential. Unconfirmed transaction chains, batching, and parallel settlement are not implemented. For a verified owner action, `reconcileConfirmed(state, remainingBudget)` can update confirmed state only when the queue is empty, and cannot increase the allowance. The delegation adapter’s `adoptOwnerAction()` validates a confirmed owner transition before reconciliation; this does not provide general automatic external-state synchronization. The counter adapter persists exact signed transaction bytes before broadcasting and checks confirmed chain receipts on retries.
 
 ## Real CKB counter prototype
 
 The owner wallet funds a cell containing a counter and cumulative fee budget. Its lock binds the owner lock hash, session public key, per-move fee limit, and minimum preserved capacity. The session key can advance the counter by exactly one; the on-chain script rejects other moves, extra payments, lock changes, invalid signatures, and overspending. Owner recovery consumes the session cell to revoke it.
 
-`authorizeCounter(ownerSigner, options)` and `revokeCounter(ownerSigner, ...)` accept an existing CCC signer, including a signer obtained from the CCC wallet connector. `CkbCounterAdapter` handles session-key signing and real background settlement without invoking the owner signer for each move. The CLI uses a generated test-only private-key signer to verify the flow automatically; a browser wallet popup flow has not been manually tested.
+`authorizeCounter(ownerSigner, options)` and `revokeCounter(ownerSigner, ...)` accept an existing CCC signer, including a signer obtained from the CCC wallet connector. `CkbCounterAdapter` handles session-key signing and real background settlement without invoking the owner signer for each move. The browser demo obtains its owner signer from the wallet connector. The CLI uses a generated test-only private-key signer for its separate verification flow. Browser tests use injected wallet fixtures; availability and prompts still depend on the actual connected wallet.
 
-See [contract format and limits](contracts/README.md). This version has **local expiration only**, a fixed counter policy, and sequential settlement. The architecture's separate authority cell, app policy modules, embedded signer isolation and on-chain expiration are not implemented yet. Sponsored variants require their own deployment and service; see [PAYMASTER.md](PAYMASTER.md).
+See [contract format and limits](contracts/README.md). The counter policy permits only increment-by-one transitions. For developer-defined named u64 transitions and owner-only actions, use the reusable delegation API described above. Arbitrary app transitions, a separate generic authority cell, isolated browser key custody, and on-chain session expiry are not supported. Settlement remains sequential. Sponsored counter and delegation deployments are recorded in [deployments/pilot-sponsored.json](deployments/pilot-sponsored.json); using them requires a matching paymaster service. See [PAYMASTER.md](PAYMASTER.md).
 
 ### Local chain
 
@@ -224,12 +265,15 @@ npm run ckb -- revoke devnet
 
 ### Public testnet
 
-A verified deployment and transaction history are recorded in [deployments/testnet.json](deployments/testnet.json). Run `npm run testnet:verify` to independently check live code, committed authorization and moves, budget changes, and revocation against the public RPC. Rejection evidence comes from node CKB-VM dry-runs.
+The self-funded counter deployment and recorded transaction history are in [deployments/testnet.json](deployments/testnet.json). Run `npm run testnet:verify` to independently check live code, committed authorization and moves, budget changes, and revocation against the public RPC. Rejection evidence comes from node CKB-VM dry-runs.
+
+The following commands create a separate CLI-owned deployment and session. They are not required to use the browser demo’s existing deployments. Build the contracts first, and fund the displayed test-only address for the compiled code cell plus session capacity and fees. If this CLI already has a deployment, reuse it and omit `deploy`.
 
 ```sh
+npm run contracts:build
 npm run ckb -- address testnet
 npm run ckb -- faucet testnet
-# Fund the displayed address with enough test CKB for the ~94,000 CKB code cell.
+# Fund the displayed address for code-cell capacity, session capacity, and fees.
 npm run ckb -- deploy testnet
 npm run ckb -- authorize testnet
 npm run ckb -- move testnet
@@ -238,11 +282,11 @@ npm run ckb -- move testnet
 npm run ckb -- revoke testnet
 ```
 
-The default session has a 300,000-shannon fee budget and a 100,000-shannon fee per move, allowing three moves. Run rejection checks after the first move while sufficient budget remains to construct both deliberately invalid transactions. `reject` invokes the node's actual CKB-VM via dry-run; rejected transactions never become on-chain records.
+The CLI’s default session has a 300,000-shannon fee budget and a 100,000-shannon fee per move, allowing three moves. Run rejection checks after the first move while sufficient budget remains to construct both deliberately invalid transactions. `reject` invokes the node's actual CKB-VM via dry-run; rejected transactions never become on-chain records.
 
 `move` prints the optimistic position immediately after durable local acceptance, then waits for actual chain confirmation. `resume` retries existing queued transactions without creating another action. Confirmations wait for inclusion plus one subsequent block; they do not guarantee immunity from deeper reorgs.
 
-Keys and execution journals are stored under git-ignored `.pilot/<network>/`. The CLI creates random test-only keys, stores them with owner-only file permissions, and never prints them. It saves transaction bytes before broadcast. Do not delete journals with unresolved transactions, share these key files, or run concurrent CLI instances for the same session. The deployed code cell remains funded after session revocation; its capacity is separate from the session's preserved capacity.
+Keys and execution journals are stored under git-ignored `.pilot/<network>/`. The CLI creates random test-only keys, stores them with owner-only file permissions, and never prints them. The move adapter saves exact signed bytes before broadcast. CLI owner setup, deployment, and recovery do not all use the browser’s durable owner-receipt protocol; reconcile their transaction outcome before repeating an interrupted owner operation. Do not delete journals with unresolved transactions, share these key files, or run concurrent CLI instances for the same session. The deployed code cell remains funded after session revocation; its capacity is separate from the session's preserved capacity.
 
 For a browser integration, use the CCC connector's signer as the owner and provide durable Pilot and settlement stores. The session-key custody design must be integrated separately; this prototype does not isolate a browser session key from app JavaScript.
 
@@ -252,6 +296,14 @@ npm run check:all
 
 The package remains private while the protocol and wallet integrations are developed.
 
+
+## Accounts and activity across apps
+
+`PilotAccountsProvider`, `usePilotAccounts()`, and `PilotAccountMenu` let an integrating app remember multiple owners from the same or different wallets in one browser. Hints are scoped to the site and network and do not grant signing authority. Switching verifies the address and signing identity; profiles, permissions, sessions, queues, and logs follow the selected owner. Use `usePilotAccountGuard()` while signing or settling to prevent unsafe account switches. The demo wires these components across its panels.
+
+**Add account / choose wallet** restarts the connection flow. **Add JoyID account** opens fresh authentication, but JoyID controls whether account creation or a new-passkey option is available. Pilot cannot enumerate never-connected accounts or force JoyID to create another owner. Disconnecting or switching does not revoke an existing session.
+
+The docs website’s **Pilot Board** indexes the four known counter/delegation policies, including sponsored variants, across apps and owners. It combines committed chain transactions, configured shared off-chain receipts, and all available same-origin account activity logs. Records expand to show details and timelines. Shared receipts are app-reported acceptance; local logs are editable diagnostics and are not uploaded. Logs stored on another origin or device are unavailable. Custom policy code hashes require a Board catalog entry.
 
 ## Signing security and profile history
 
@@ -263,8 +315,12 @@ Read [SECURITY_AUDIT.md](SECURITY_AUDIT.md) before using signing flows. This rev
 
 Pilot can use Owl’s pool through `PilotPaymasterClient`. Sponsored counter and reusable-delegation policies preserve the user’s app-cell capacity. The pool input/change pays the entire CKB network fee; users still provide their storage capacity, transfers, and app payments. There is no automatic user-paid fallback.
 
-This is implemented and tested in the SDK/service and CKB VM, but is **not activated on public testnet**: both new contract code cells are deployed and verified live, and the pool service still requires its matching server-only key and demo configuration. The configured receiving address was verified at **100,000 test CKB** on October 18, 2026. Existing v1 sessions still pay their own fees. See [PAYMASTER.md](PAYMASTER.md) for activation, integration, retry behavior and limits.
+The sponsored counter and delegation code-cell identities and pinned pool are configured in [deployments/pilot-sponsored.json](deployments/pilot-sponsored.json). The demo selects them when `VITE_PILOT_PAYMASTER_URL` is set. Actual sponsorship depends on service availability, the matching server-only pool key, pool capacity, compatible transactions, and configured fee limits; a deployment record or displayed pool balance does not prove that a hosted service is ready. Existing self-funded sessions retain their original fee rules and need a new compatible session to use sponsorship. Username transfers still require owner authorization even when the pool pays their network fee.
+
+The docs paymaster page accepts reviewed test-CKB contributions to the operator-controlled pool. A deposit is separate from a session cell, does not create a personal allowance or guarantee sponsorship, and has no automatic refund. See [PAYMASTER.md](PAYMASTER.md) for service setup, integration, accounting, retry behavior and limits.
 
 ## Host the demo and backend on Vercel
 
-The root [vercel.json](vercel.json) serves the demo and username/social/paymaster APIs in one project. Import the repository with the root directory unchanged, configure a pooled `DATABASE_URL`, comma-separated exact `PILOT_APP_ORIGINS`, a stable `PILOT_REGISTRY_ORIGIN`, the demo-specific `PILOT_SOCIAL_AUDIENCE`, the server-only pool key, and public API build URLs. See [VERCEL.md](VERCEL.md) for deployment steps and verification. PostgreSQL now stores paymaster quotes/retry bytes/leases/accounting and social state/receipts/revocations as well as usernames; database row locks coordinate concurrent function instances. Serverless requests require PostgreSQL and fail closed without it. Standalone Node services retain JSON fallback when no database URL is set. Existing JSON data is not imported automatically.
+The root [vercel.json](vercel.json) serves the demo and username/social/paymaster APIs in one project. Import the repository with the root directory unchanged, configure a pooled `DATABASE_URL` or `POSTGRES_URL` (`DATABASE_URL` takes precedence), comma-separated exact `PILOT_APP_ORIGINS`, a stable `PILOT_REGISTRY_ORIGIN`, the demo-specific `PILOT_SOCIAL_AUDIENCE`, the server-only pool key, and public API build URLs. See [VERCEL.md](VERCEL.md) for deployment steps and verification. PostgreSQL stores paymaster quotes/retry bytes/leases/accounting and social state/receipts/revocations as well as usernames; database row locks coordinate concurrent function instances. Serverless requests require PostgreSQL and fail closed without it. Standalone Node services retain JSON fallback when no database URL is set. Existing JSON data is not imported automatically.
+
+Deploy the docs as a second Vercel project rooted at `apps/docs`, using its own [vercel.json](apps/docs/vercel.json). The demo and backend project stays at the repository root. The smart-contract directories are not Vercel services. Browser origin allowlists may contain multiple apps; they control browser access and are not developer API keys or per-app sponsorship entitlements. Developer project IDs, secrets, and dashboard management remain a proposal in [IMPLEMENTATION_V2.md](IMPLEMENTATION_V2.md).

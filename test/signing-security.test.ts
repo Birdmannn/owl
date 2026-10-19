@@ -102,5 +102,20 @@ test('counter setup persists exact signed bytes before broadcast and refuses to 
     assert.equal(broadcasts, 0);
     await assert.rejects(authorizeCounter(owner, { ...options, async onSigned(cell, bytes) { persisted = bytes; assert.equal(ccc.Transaction.fromBytes(bytes).hash(), ccc.OutPoint.from(cell.outPoint).txHash); } }), /Lost response/);
     assert.equal(broadcasts, 1); assert.ok(persisted);
+    const { withPilotBudget, PilotCounterConnector, decodeCounterData } = await import('../src/index.js');
+    const manifest = withPilotBudget({ version: 1 as const, app: { id: 'test.budget', name: 'Budget test', description: 'Chosen allowance' },
+      permissions: [{ id: 'counter.increment' as const, name: 'Move', description: 'One step' }],
+      policy: { kind: 'counter-v1' as const, deployment, feePerMove: '100000', budget: '2000000', floorCapacity: '15000000000' } }, '500000');
+    await assert.rejects(new PilotCounterConnector(owner, manifest).authorize(['counter.increment'], {
+      sessionPublicKey: options.sessionPublicKey,
+      async onSigned(_cell, bytes) {
+        persisted = bytes;
+        const tx = ccc.Transaction.fromBytes(bytes);
+        assert.equal(decodeCounterData(tx.outputsData[0]!).budget, 500000n);
+        assert.equal(tx.outputs[0]!.capacity, 15000500000n);
+      },
+    }), /Lost response/);
+    assert.equal(broadcasts, 2);
+
   } finally { ccc.Transaction.prototype.completeInputsByCapacity = previousInputs; ccc.Transaction.prototype.completeFeeBy = previousFee; }
 });

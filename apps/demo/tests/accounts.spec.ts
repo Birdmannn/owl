@@ -26,8 +26,7 @@ test('two users from the same extension keep distinct profiles and account hints
   await expect(page.getByRole('button', { name: 'Open Pilot' })).not.toBeVisible();
   await wallet.selectAccount(0);
   // The extension now reports A; Pilot restores A’s profile, never B’s.
-  await expect(page.getByRole('button', { name: 'Continue as @pilot_user_a' })).toBeVisible();
-  await page.getByRole('button', { name: 'Continue as @pilot_user_a' }).click();
+  await expect(page.getByRole('button', { name: 'Create Pilot profile' })).toHaveCount(0);
   await expect(page.getByRole('dialog', { name: 'Sign these on my behalf' }).getByText('@pilot_user_a', { exact: true })).toBeVisible();
 });
 

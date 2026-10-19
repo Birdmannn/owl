@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ccc } from '@ckb-ccc/connector-react';
-import { assertCounterPermission, type PilotEvent } from '@owl/pilot';
+import { assertCounterPermission, withPilotBudget, type PilotEvent } from '@owl/pilot';
 import { revokeSavedSession, revocationKey, amount, authorize, budget, deployment, fee, readSession, restore, sessionKey, type Runtime } from './runtime';
 import { TransactionInspector } from './TransactionInspector';
 import { updateActivity, transactionObserver, logFailure, readActivity } from './activity';
@@ -33,6 +33,11 @@ function App() {
   usePilotAccountGuard(!!operationBusy || (runtime?.pilot.queueLength ?? 0) > 0);
   const [message, setMessage] = useState('');
   const [pilotOpen, setPilotOpen] = useState(false);
+  const [profileLookupError,setProfileLookupError]=useState('');
+  const [profileLoading,setProfileLoading]=useState(false);
+  const [selectedBudget,setSelectedBudget]=useState(flightManifest.policy.budget);
+  const sessionManifest=runtime?.saved.manifest??withPilotBudget(flightManifest,selectedBudget);
+  const sessionBudget=BigInt(sessionManifest.policy.budget);
   const [profile, setProfile] = useState<PilotProfile>();
   const [transactions, setTransactions] = useState<string[]>([]);
   const lockHeld = useRef(false);
@@ -59,19 +64,20 @@ function App() {
   };
   useEffect(() => {
     const version = ++epoch.current;
-    active.current = undefined; setRuntime(undefined); setReady(false); setAddress(''); setProfile(undefined); setBalance(undefined); setPosition(0); setSettled(0); setRemaining(budget); setTransactions([]); setMessage(''); setBusy('');
+    active.current = undefined; setRuntime(undefined); setReady(false); setAddress(''); setProfile(undefined); setBalance(undefined); setPosition(0); setSettled(0); setRemaining(budget); setSelectedBudget(flightManifest.policy.budget);setProfileLoading(false);setProfileLookupError(''); setTransactions([]); setMessage(''); setBusy('');
     let release: (() => void) | undefined;
     let cancelled = false;
     const lockAbort = new AbortController();
     let waitNotice: number | undefined;
     if (signer) {
-      setBusy('Connecting wallet');
+      setBusy('Connecting wallet'); setProfileLoading(true);
       void (async () => {
         const a = await signer.getRecommendedAddress();
         if (cancelled) return;
         setAddress(a);
         try { const savedProfile = await loadProfile(a); if (cancelled) return; setProfile(savedProfile); }
-        catch (e) { if (!cancelled) setMessage(errorText(e)); }
+        catch (e) { if (!cancelled) setProfileLookupError(errorText(e)); }
+        finally { if (!cancelled) setProfileLoading(false); }
         void signer.getBalance().then(b => { if (!cancelled) setBalance(b); }).catch(() => {});
         if (!navigator.locks) throw new Error('This browser cannot protect sessions across tabs. Use a current browser.');
         waitNotice = window.setTimeout(() => { if (!cancelled && !lockHeld.current) setMessage('Waiting for session access. If Pilot is open in another tab, close it to continue here.'); }, 1000);
@@ -87,7 +93,7 @@ function App() {
           await hold;
           lockHeld.current = false;
         }).catch(e => { if (!cancelled && e?.name !== 'AbortError') setMessage(errorText(e)); });
-      })().catch(e => { if (!cancelled) { setMessage(errorText(e)); setBusy(''); } });
+      })().catch(e => { if (!cancelled) { setMessage(errorText(e)); setBusy(''); setProfileLoading(false); } });
     }
     return () => { cancelled = true; clearTimeout(waitNotice); lockAbort.abort(); const r = active.current; active.current = undefined; if (r) void r.pilot.flush().catch(() => {}).finally(() => release?.()); else release?.(); };
   }, [signer]);
@@ -97,12 +103,19 @@ function App() {
     const timer = window.setInterval(tick, 5000); window.addEventListener('online', tick);
     return () => { clearInterval(timer); window.removeEventListener('online', tick); };
   }, [runtime]);
+  const retryProfile = async () => {
+    if (!address) return;
+    const version=epoch.current;setProfileLoading(true);setProfileLookupError('');
+    try {const value=await loadProfile(address);if(epoch.current===version)setProfile(value);}
+    catch(error){if(epoch.current===version)setProfileLookupError(errorText(error));}
+    finally{if(epoch.current===version)setProfileLoading(false);}
+  };
   const start = async (permissions: string[]): Promise<boolean> => {
     if (!signer || !address || !lockHeld.current) return false; setBusy('Approve the session in your wallet'); setMessage('');
     const version = epoch.current;
     const key = sessionKey(address);
     try {
-      const saved = await authorize(signer, key, permissions);
+      const saved = await authorize(signer, key, permissions, selectedBudget);
       if (version !== epoch.current) return false;
       setBusy('Activating session'); await attach(key, saved, version);
       void signer.getBalance().then(setBalance).catch(() => {});
@@ -113,7 +126,7 @@ function App() {
   const move = async () => {
     const r = active.current; if (!r || !ready) return;
     setReady(false);
-    try { if(!r.saved.grant)throw new Error('No Pilot permission grant'); assertCounterPermission(flightManifest,r.saved.grant,'counter.increment'); await r.pilot.execute('move'); await refresh(r); flush(r); } catch (e) { setMessage(errorText(e)); await refresh(r); }
+    try { if(!r.saved.grant)throw new Error('No Pilot permission grant'); assertCounterPermission(r.saved.manifest??flightManifest,r.saved.grant,'counter.increment'); await r.pilot.execute('move'); await refresh(r); flush(r); } catch (e) { setMessage(errorText(e)); await refresh(r); }
   };
   const revoke = async () => {
     const r = active.current; if (!r || !signer || r.pilot.queueLength || !r.saved.cell) return;
@@ -136,7 +149,7 @@ function App() {
     <header><a className="brand" href="/" aria-label="Pilot home"><img src="/owl.png" alt=""/><span>pilot<span className="by">by owl</span></span></a><div className="header-actions"><span className="network"><i/> CKB Testnet</span>{address ? <button className="wallet" onClick={() => setPilotOpen(true)} title="Open Pilot" aria-label="Open Pilot" disabled={!!busy}>{profile?`Pilot · @${profile.username}`:short(address)} <span>↗</span></button> : <button className="wallet" onClick={() => setPilotOpen(true)}>Connect wallet <span>↗</span></button>}</div></header>
     <main><div className="intro"><div className="eyebrow">THE PILOT PLAYGROUND <span>01 / FLIGHT DEMO</span></div><h1>One approval.<br/><em>Room to play.</em></h1><p>A little flight, powered by Pilot. Connect your wallet,<br className="desktop"/> approve a session, and take off without signing every move.</p></div>
       {sponsorshipRequested&&!sponsorshipReady&&<p role="alert">Sponsorship is configured, but its contract deployment is missing. Flight actions are blocked until the sponsored deployment is configured. No user-paid fallback.</p>}<div className="workspace"><section className="flight"><div className="panel-top"><span>OWL’S FIRST FLIGHT</span><span className="tag">LIVE TESTNET DEMO</span></div><div className="sky"><div className="sun"/><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><span className="coordinate">CKB / AIRSPACE 001</span><div className="flight-owl" style={{left:`${12 + (position % 10) * 7.6}%`, top:`${49 - (position % 4) * 5}%`}}><img src="/owl.png" alt="Your owl"/><span className="owl-shadow"/></div><div className="route">{Array.from({length:10},(_,i)=><span key={i} className={i <= position%10 ? 'visited':''}>{i===position%10 ? '✦' : '·'}</span>)}</div><div className="altitude"><span>FLIGHT DISTANCE</span><strong data-testid="position">{String(position).padStart(2,'0')}<small> moves</small></strong></div><div className="hills hill-one"/><div className="hills hill-two"/></div><div className="flight-bottom"><div><span className={`status-dot ${ready?'green':''}`}/><span>{runtime ? ready ? 'Ready for your next move' : remaining < fee ? 'Flight budget used. Start a new session.' : 'Checking session' : 'Your owl is waiting for takeoff'}</span></div><button className="primary move" disabled={!ready || !!busy} onClick={() => void move()}>Fly forward <span>→</span></button></div></section>
-      <aside className="session"><div className="panel-top"><span>YOUR PILOT SESSION</span><span className={`session-indicator ${runtime?'enabled':''}`}>{runtime?'ACTIVE':'OFFLINE'}</span></div><div className="session-icon">✦</div><h2>{runtime ? 'You’re in control.' : 'Give your owl wings.'}</h2><p>{runtime ? 'Every move appears instantly. Pilot signs and records it on CKB in the background.' : 'Your wallet approves a small, limited session. Pilot handles the moves from there.'}</p><div className="policy"><div><span>Allowed action</span><strong>Fly forward, one step</strong></div><div><span>Flight allowance</span><strong>{runtime ? Number(remaining / fee) : 20} moves</strong></div><div><span>{sponsorshipReady?'Your network fee':'Fee per move'}</span><strong>{sponsorshipReady?'0 CKB · pool pays':'0.001 CKB'}</strong></div><div><span>{sponsorshipReady?'Remaining sponsored allowance':'Remaining fee budget'}</span><strong>{amount(remaining)} CKB</strong></div></div><div className="budget-track"><div style={{width:`${Number(remaining)*100/Number(budget)}%`}}/></div>
+      <aside className="session"><div className="panel-top"><span>YOUR PILOT SESSION</span><span className={`session-indicator ${runtime?'enabled':''}`}>{runtime?'ACTIVE':'OFFLINE'}</span></div><div className="session-icon">✦</div><h2>{runtime ? 'You’re in control.' : 'Give your owl wings.'}</h2><p>{runtime ? 'Every move appears instantly. Pilot signs and records it on CKB in the background.' : 'Your wallet approves a small, limited session. Pilot handles the moves from there.'}</p><div className="policy"><div><span>Allowed action</span><strong>Fly forward, one step</strong></div><div><span>Flight allowance</span><strong>{runtime ? Number(remaining / fee) : Number(sessionBudget/fee)} moves</strong></div><div><span>{sponsorshipReady?'Your network fee':'Fee per move'}</span><strong>{sponsorshipReady?'0 CKB · pool pays':'0.001 CKB'}</strong></div><div><span>{sponsorshipReady?'Remaining sponsored allowance':'Remaining fee budget'}</span><strong>{amount(runtime?remaining:sessionBudget)} CKB</strong></div></div><div className="budget-track"><div style={{width:`${Number(runtime?remaining:sessionBudget)*100/Number(sessionBudget)}%`}}/></div>
         {!address ? <button className="primary full" onClick={() => setPilotOpen(true)}>Connect wallet <span>↗</span></button> : !runtime ? hasSubmitted ? <button className="primary full" disabled={!!busy} onClick={() => void retry()}>Resume session <span>→</span></button> : <button className="primary full" disabled={!!busy || !lockHeld.current} onClick={() => setPilotOpen(true)}>Enable Pilot <span>↗</span></button> : <button className="secondary full" disabled={!!busy || runtime.pilot.queueLength > 0} onClick={() => void revoke()}>End session & reclaim CKB <span>↗</span></button>}
         <div className="session-note">{busy || (address ? `${walletName ?? 'Wallet'} connected${balance !== undefined ? ` · ${amount(balance)} CKB` : ''}` : 'Use your existing wallet. No new account.')}{address && <button className="copy-address" title={address} onClick={() => void navigator.clipboard.writeText(address).then(() => setMessage('CKB testnet address copied.')).catch(e => setMessage(errorText(e)))}>Copy CKB address</button>}</div>
       </aside></div>
@@ -146,10 +159,10 @@ function App() {
       <TransactionInspector storageKey={address ? sessionKey(address) : undefined} runtime={runtime} client={client} onRetry={() => { const r = active.current; if (r) flush(r); }}/>
       <OffchainSocial signer={signer} address={address} onConnectOwner={()=>open()}/>
       <UsernameTransfers signer={signer} onSent={()=>{if(signer)void signer.getBalance().then(setBalance).catch(()=>{});}}/>
-      <CellDelegation signer={signer} address={address} balance={balance} profile={profile} onConnectOwner={()=>open()} onDisconnectOwner={()=>disconnect()} onRefreshBalance={()=>{if(signer)void signer.getBalance().then(setBalance).catch(e=>setMessage(errorText(e)));}}
+      <CellDelegation profileLookupError={profileLookupError} onRetryProfile={()=>void retryProfile()} profileLoading={profileLoading} signer={signer} address={address} balance={balance} profile={profile} onConnectOwner={()=>open()} onDisconnectOwner={()=>disconnect()} onRefreshBalance={()=>{if(signer)void signer.getBalance().then(setBalance).catch(e=>setMessage(errorText(e)));}}
         onProfile={async username=>{if(!signer)throw new Error('Connect your owner wallet first');const version=epoch.current;const value=await saveProfile(signer,username);if(epoch.current!==version)throw new Error('Wallet changed during registration');setProfile(value);return value;}}/>
     </main><footer><span>Built with Owl’s Pilot SDK</span><span>Session keys stay in this browser · Test CKB only</span></footer>
-    <PilotModal manifest={flightManifest} visible={pilotOpen&&!isOpen} address={address} walletName={walletName} balance={balance} profile={profile} active={!!runtime} busy={busy} canAuthorize={lockHeld.current} queueLength={runtime?.pilot.queueLength??0} submitted={!!hasSubmitted&&!runtime} onResume={retry} error={message}
+    <PilotModal onBudgetChange={setSelectedBudget} budgetLimit={flightManifest.policy.budget} profileLookupError={profileLookupError} onRetryProfile={()=>void retryProfile()} profileLoading={profileLoading} manifest={sessionManifest} visible={pilotOpen&&!isOpen} address={address} walletName={walletName} balance={balance} profile={profile} active={!!runtime} busy={busy} canAuthorize={lockHeld.current} queueLength={runtime?.pilot.queueLength??0} submitted={!!hasSubmitted&&!runtime} onResume={retry} error={message}
       onClose={()=>setPilotOpen(false)} onConnectOwner={()=>open()} onProfile={async username=>{if(!signer)throw new Error('Connect your owner wallet first');const version=epoch.current;setBusy('Register your username in your wallet');try{const value=await saveProfile(signer,username);if(epoch.current!==version)throw new Error('Wallet changed during registration');setProfile(value);if(active.current)void refresh(active.current);return value;}finally{if(epoch.current===version)setBusy('');}}} onAuthorize={start}
       onDisconnect={()=>{setPilotOpen(false);disconnect();}} onRevoke={revoke} onRefreshBalance={()=>{if(signer)void signer.getBalance().then(setBalance).catch(e=>setMessage(errorText(e)));}}/>
   </div>;

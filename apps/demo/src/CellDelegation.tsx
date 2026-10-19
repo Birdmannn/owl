@@ -6,13 +6,13 @@ import { useEffect, useRef, useState } from 'react';
 import { ccc } from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { SponsorQuoteRejectedError, Pilot, LocalStorageStore, PilotConnector, PilotDelegationAdapter, prepareOwnerAction, prepareDelegationRecovery, submitOwnerDelegationTransaction,
-  recordPilotActivity, validatePilotAppManifest, type Deployment, type DelegatedCell, type Session, type PreparedDelegation, type DelegationReceipt, type SettlementJournal,
+  recordPilotActivity, validatePilotAppManifest, withPilotBudget, type Deployment, type DelegatedCell, type Session, type PreparedDelegation, type DelegationReceipt, type SettlementJournal,
   type CounterTransactionEvent, type PilotActionRequest } from '@owl/pilot';
 import { PilotModal, type PilotProfileView } from '@owl/pilot-react';
 import { createDelegationExample } from '../../../examples/cell-delegation';
 import configuration from '../../../deployments/cell-delegation.json';
 
-type Saved = { session: Session; privateKey: ccc.Hex; cell: DelegatedCell };
+type Saved = { budget?: string; session: Session; privateKey: ccc.Hex; cell: DelegatedCell };
 type Runtime = { pilot: Pilot<{ position: number }, PilotActionRequest<undefined>>; adapter: PilotDelegationAdapter<{ position: number }, undefined>; saved: Saved };
 function jsonStore<T>(key: string) {
   return { async load(): Promise<T | undefined> { const value = localStorage.getItem(key); return value ? JSON.parse(value) : undefined; },
@@ -29,11 +29,12 @@ function savedDeployment(): Deployment | undefined {
     return value.network === 'testnet' ? value : undefined;
   } catch { return undefined; }
 }
-export function CellDelegation({ signer, address, balance, profile, onProfile, onConnectOwner, onRefreshBalance, onDisconnectOwner }: {
-  signer?: ccc.Signer; address: string; balance?: bigint; profile?: PilotProfileView;
+export function CellDelegation({ profileLookupError, onRetryProfile, profileLoading, signer, address, balance, profile, onProfile, onConnectOwner, onRefreshBalance, onDisconnectOwner }: {
+  profileLookupError?: string; onRetryProfile?:()=>void; profileLoading?: boolean; signer?: ccc.Signer; address: string; balance?: bigint; profile?: PilotProfileView;
   onProfile: (name: string) => Promise<PilotProfileView>; onConnectOwner: () => void; onRefreshBalance: () => void; onDisconnectOwner: () => void;
 }) {
   const [deployment, setDeployment] = useState<Deployment | undefined>(savedDeployment);
+  const [selectedBudget,setSelectedBudget]=useState('2000000');
   const [mode, setMode] = useState<'create' | 'migrate'>('create');
   const [sourceHash, setSourceHash] = useState(''); const [sourceIndex, setSourceIndex] = useState('0');
   const [visible, setVisible] = useState(false); const [busy, setBusy] = useState(''); const [error, setError] = useState('');
@@ -47,7 +48,12 @@ export function CellDelegation({ signer, address, balance, profile, onProfile, o
   const liveKey = useRef('');
   const key = address && deployment ? `pilot:cell-delegation:${deployment.codeHash}:${address}` : '';
   usePilotAccountGuard(!!busy || queue.length > 0);
-  const definition = deployment ? createDelegationExample(deployment, sponsorshipRequested ? sponsored.poolLock as ccc.ScriptLike : undefined) : undefined;
+  const baseDefinition = deployment ? createDelegationExample(deployment, sponsorshipRequested ? sponsored.poolLock as ccc.ScriptLike : undefined) : undefined;
+  function definitionFor(budget?: string) {
+    if (!baseDefinition) return undefined;
+    return { ...baseDefinition, manifest: withPilotBudget(baseDefinition.manifest,budget??baseDefinition.manifest.policy.budget) };
+  }
+  const definition = definitionFor(runtime?.saved.budget??selectedBudget);
   const sponsorOptions = () => ({ paymaster: signer ? getPaymaster(signer.client) : undefined });
   function discardRejectedOwnerQuote(error: unknown) {
     if (!(error instanceof SponsorQuoteRejectedError)) return;
@@ -97,6 +103,7 @@ export function CellDelegation({ signer, address, balance, profile, onProfile, o
     const journal = await jsonStore<{ queue: unknown[] }>(key + ':pilot').load(); setQueue(journal?.queue ?? []);
   }
   async function attach(saved: Saved, version = epoch.current) {
+    const definition=definitionFor(saved.budget);
     if (!signer || !definition) throw new Error('Connect a wallet and configure a deployment');
     if (!(await signer.getRecommendedAddressObj()).script.eq(saved.cell.ownerLock)) throw new Error('Saved delegation belongs to another connected wallet');
     const adapter = await PilotDelegationAdapter.create({ ...sponsorOptions(), definition, client: signer.client, cell: saved.cell, session: saved.session,
@@ -169,7 +176,7 @@ export function CellDelegation({ signer, address, balance, profile, onProfile, o
     const version = epoch.current; const release = holdOwnerOperation();
     setBusy('Approve the reviewed delegation in your wallet');
     try {
-      const saved: Saved = { privateKey: value.privateKey, cell: value.transaction.cell,
+      const saved: Saved = { budget: definition.manifest.policy.budget, privateKey: value.privateKey, cell: value.transaction.cell,
         session: { id: crypto.randomUUID(), network: definition.manifest.network, policyVersion: definition.manifest.policy.kind, expiresAt: Date.now() + 86_400_000 } };
       await jsonStore<Saved>(key + ':session').save(saved);
       saved.cell = await value.connector.authorize(value.transaction, jsonStore(key + ':setup'), event => log(event));
@@ -257,7 +264,7 @@ export function CellDelegation({ signer, address, balance, profile, onProfile, o
         <button disabled={!!busy} onClick={()=>void ownerAction(ownerReview.recovery,true)}>Approve owner transaction</button><button disabled={!!busy} onClick={()=>setOwnerReview(undefined)}>Cancel review</button>
       </div>}
       <details><summary>App manifest and registered actions</summary><pre>{JSON.stringify(definition.manifest, null, 2)}</pre></details>
-      <PilotModal manifest={definition.manifest} visible={visible} address={address} balance={balance} profile={profile} active={!!runtime} busy={busy} canAuthorize={!!signer && lease.current}
+      <PilotModal profileLookupError={profileLookupError} onRetryProfile={onRetryProfile} profileLoading={profileLoading} budgetLimit={baseDefinition!.manifest.policy.budget} onBudgetChange={value=>{prepared.current=undefined;setSelectedBudget(value);}} manifest={definition.manifest} visible={visible} address={address} balance={balance} profile={profile} active={!!runtime} busy={busy} canAuthorize={!!signer && lease.current}
         queueLength={queue.length} submitted={submitted} error={error} onResume={resume} onClose={() => setVisible(false)} onConnectOwner={onConnectOwner} onProfile={onProfile}
         onPrepareDelegation={prepare} onAuthorize={authorize} onContinueWithoutDelegation={() => { prepared.current = undefined; setVisible(false); log({ phase: 'connected', delegation: 'declined' }); }}
         approvedPermissions={runtime?.saved.cell.grant.permissions} onDisconnect={()=>{setVisible(false);onDisconnectOwner();}} onRevoke={() => ownerAction(true)} onRefreshBalance={onRefreshBalance}/>

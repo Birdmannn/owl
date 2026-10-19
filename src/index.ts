@@ -14,3 +14,4 @@ export * from './accounts.js';
 export * from './paymaster.js';
 
 export * from './ckb/sponsored-code.js';
+export * from './budget.js';

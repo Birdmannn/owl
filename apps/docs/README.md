@@ -16,27 +16,21 @@ VITE_DEMO_URL=https://your-demo.example npm run build --prefix apps/docs
 npm run preview --prefix apps/docs
 ```
 
-The site includes page navigation, section links, searchable docs (Cmd/Ctrl+K), copyable code blocks, and mobile navigation. Edit content in `src/content.js`. The app-integration quickstart is in `src/quickstart.js`: it uses `scripts/install-pilot.mjs` to clone, build, and install the SDK, React modal, and wallet connector automatically in an existing npm app, then covers wallet connection and app integration. No package publication is required. The `#cell-delegation` page in `src/delegation.js` covers developer-defined manifests, builders, selected-cell authorization, manual actions, and recovery; the implementation record is [CELL_DELEGATION.md](../../CELL_DELEGATION.md).
+The site includes page navigation, section links, searchable docs (Cmd/Ctrl+K), copyable code blocks, mobile navigation, and a header GitHub icon linking to the repository. Edit content in `src/content.js`. The app-integration quickstart is in `src/quickstart.js`: it uses `scripts/install-pilot.mjs` to clone, build, and install the SDK, React modal, and wallet connector automatically in an existing npm app, then covers wallet connection and app integration. No package publication is required. The `#cell-delegation` page in `src/delegation.js` covers developer-defined manifests, builders, selected-cell authorization, manual actions, and recovery; the implementation record is [CELL_DELEGATION.md](../../CELL_DELEGATION.md).
 
 ## Owl Paymaster
 
 The separate `#paymaster` page connects wallets through CCC and supports reviewed, owner-signed deposits of test CKB. The receiving address is read from `deployments/owl-paymaster.json`, or overridden with `VITE_PAYMASTER_ADDRESS`. No address is invented; deposits stay disabled until an address is configured. The recipient must be a valid `ckt1` testnet address. The form enforces the lock's minimum cell capacity and shows the actual transfer fee before signing.
 
-Create a password-protected account locally:
-
-```sh
-ckb-cli account new --local-only
-```
-
-Set and confirm the password at the terminal prompts. Copy only the output's public `testnet` address into the manifest's `address` field. Keep the password and encrypted keystore out of the repo. Do not use `ckb-cli account export` for this setup.
+Pool setup and signing configuration belong in the [paymaster service guide](../../PAYMASTER.md). The public docs describe deposit review, sponsorship eligibility, fees, and receipt recovery.
 
 Signed deposits are saved before broadcast, with their exact transaction bytes. Receipts survive reloads, and uncertain submissions can be queried or retried using the saved transaction. An unresolved deposit prevents a new deposit in this browser. The deposit page does not implement automatic refunds.
 
-The current counter contract cannot take a paymaster input: it restricts moves to one session-cell input and one successor. The sponsorship service and a compatible policy are still needed before this balance can pay users' transaction fees. The page makes that status explicit and does not advertise the current demo as fee-free.
+The original self-funded counter contract cannot take a paymaster input. Separate sponsored counter and delegation policies are configured in `deployments/pilot-sponsored.json`; integrating apps use `PilotPaymasterClient` with the matching service and pinned pool. Sponsorship depends on compatible transactions, service availability, pool capacity, and fee limits. Deposits do not create a personal allowance or guarantee sponsorship. The displayed balance is not a service-health check.
 
 ## Pilot Board
 
-The `#board` page indexes both known Pilot lock policies across apps and owners on CKB testnet, including setup, delegated actions, owner transitions, and recovery. Records expand to show full details. Source filters and search cover chain receipts, shared off-chain receipts, and every available same-origin account journal entry. Load older activity to paginate public history; fees count loaded chain transactions once.
+The `#board` page indexes all four known Pilot lock policies (counter and reusable delegation, each self-funded or sponsored) across apps and owners on CKB testnet, including setup, delegated actions, owner transitions, and recovery. Records expand to show full details. Source filters and search cover chain receipts, shared off-chain receipts, and every available same-origin account journal entry. Load older activity to paginate public history; fees count loaded chain transactions once.
 
 Set `VITE_PILOT_SOCIAL_URL=https://api.example/api/social` before building or serving the docs to include the shared social verifier’s public paginated receipt history. The backend must include `GET /api/social/receipts`; this public read endpoint supports cross-origin access without changing mutation origin restrictions. Receipt payloads are public and backend-reported acceptance is labeled separately from chain confirmation.
 
