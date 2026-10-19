@@ -122,10 +122,12 @@ test('real serverless runtime initializes PostgreSQL registry/social handlers wi
   const { createVercelHandler } = await import('../server/vercel.js');
   const { rateLimiterFromEnvironment } = await import('../server/runtime.js');
   const url = await database(t), audience = 'https://hosted.pilot.test';
-  const names = ['DATABASE_URL', 'POSTGRES_URL', 'PILOT_APP_ORIGIN', 'PILOT_PAYMASTER_PRIVATE_KEY', 'PILOT_SOCIAL_AUDIENCE', 'PILOT_REGISTRY_ORIGIN', 'PILOT_REGISTRY_ALLOWED_ORIGINS'];
+  const names = ['DATABASE_URL', 'POSTGRES_URL', 'PILOT_APP_ORIGIN', 'PILOT_APP_ORIGINS', 'PILOT_PAYMASTER_ALLOWED_ORIGINS', 'PILOT_PAYMASTER_PRIVATE_KEY', 'PILOT_SOCIAL_AUDIENCE', 'PILOT_REGISTRY_ORIGIN', 'PILOT_REGISTRY_ALLOWED_ORIGINS'];
   const saved = new Map(names.map(name => [name, process.env[name]]));
   for (const name of names) delete process.env[name];
-  process.env.POSTGRES_URL = url; process.env.PILOT_APP_ORIGIN = audience;
+  process.env.POSTGRES_URL = url; process.env.PILOT_APP_ORIGINS = audience + ',https://second.pilot.test';
+  process.env.PILOT_SOCIAL_AUDIENCE = audience;
+  process.env.PILOT_REGISTRY_ORIGIN = 'https://api.pilot.test';
   const server = createServer(createVercelHandler());
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
@@ -135,11 +137,18 @@ test('real serverless runtime initializes PostgreSQL registry/social handlers wi
   });
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const health = await fetch(base + '/api/index?pilotRoute=pilot/health'); assert.equal(health.status, 200);
+  for (const origin of [audience, 'https://second.pilot.test']) {
+    const response = await fetch(base + '/api/pilot/health', { headers: { Origin: origin } });
+    assert.equal(response.status, 200); assert.equal(response.headers.get('access-control-allow-origin'), origin);
+  }
+  assert.equal((await fetch(base + '/api/pilot/health', { headers: { Origin: 'https://unknown.pilot.test' } })).status, 403);
+  assert.equal((await fetch(base + '/api/social/state', { headers: { Origin: 'https://second.pilot.test' } })).status, 403);
+
   const owner = new ccc.SignerCkbPrivateKey(new ccc.ClientPublicTestnet(), hash(7));
   const send = (path: string, body: unknown) => fetch(base + '/api/index?pilotRoute=' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: audience }, body: JSON.stringify(body) });
   const challengeResponse = await send('pilot/challenges', { username: 'serverless_user', ownerAddress: await owner.getRecommendedAddress(), identity: await owner.getIdentity(), signType: owner.signType });
   assert.equal(challengeResponse.status, 201); const challenge = await challengeResponse.json();
-  assert.match(challenge.message, /Registry: https:\/\/hosted.pilot.test/);
+  assert.match(challenge.message, /Registry: https:\/\/api.pilot.test/);
   const claimed = await send('pilot/usernames', { challengeId: challenge.id, signature: await owner.signMessage(challenge.message) });
   assert.equal(claimed.status, 201);
   const resolved = await (await fetch(base + '/api/pilot/usernames/serverless_user')).json(); assert.equal(resolved.ownerAddress, await owner.getRecommendedAddress());

@@ -29,7 +29,9 @@ Keep source files outside the Root Directory available for the docs build, since
 ```dotenv
 # Server only
 DATABASE_URL=postgresql://...
-PILOT_APP_ORIGIN=https://pilot.example
+PILOT_APP_ORIGINS=https://pilot.example,https://another-app.example
+PILOT_REGISTRY_ORIGIN=https://pilot.example
+PILOT_SOCIAL_AUDIENCE=https://pilot.example
 PILOT_PAYMASTER_PRIVATE_KEY=0x...
 
 # Public frontend build configuration
@@ -39,9 +41,13 @@ VITE_PILOT_SOCIAL_URL=https://pilot.example/api/social
 
 The key must own the funded address in `deployments/owl-paymaster.json`. The deployer key is a different key and is not needed on Vercel. Never prefix database credentials or private keys with `VITE_`.
 
-The username API uses `/api/pilot` automatically. `PILOT_APP_ORIGIN` supplies the default registry signing origin, social audience, and allowed browser origin. Optional overrides are `PILOT_REGISTRY_ORIGIN`, `PILOT_REGISTRY_ALLOWED_ORIGINS`, `PILOT_SOCIAL_AUDIENCE`, and `PILOT_PAYMASTER_ALLOWED_ORIGINS`. Override values must be exact HTTPS origins; allowlists are comma-separated. The social audience must match the frontend's `window.location.origin`.
+The username API uses `/api/pilot` automatically in the bundled demo. `PILOT_APP_ORIGINS` is a comma-separated list of exact browser origins (HTTPS in production, HTTP allowed only on localhost). Both username and paymaster APIs allow every listed app. Wildcards, paths, credentials, trailing slashes and empty list entries are rejected. `PILOT_APP_ORIGIN` remains a backwards-compatible single-app fallback; the plural variable takes precedence.
 
-The root `.env.example` includes localhost allowlists for local development. Do not copy those localhost values into Vercel: omit the allowlist overrides to inherit `PILOT_APP_ORIGIN`, or set your public origins explicitly.
+Set `PILOT_REGISTRY_ORIGIN` to the stable public backend origin: it identifies the registry in ownership-signing messages, independently of which frontend calls it. If omitted it falls back to the first configured app origin; avoid changing that default by reordering the list. Set `PILOT_SOCIAL_AUDIENCE` explicitly to the included social demo's exact frontend origin when multiple apps are listed. The social sample has one signed app/audience and does not accept another app's social grants simply because that app is on the common allowlist. Your other application's off-chain actions need its own manifest and receiving-app verifier.
+
+Optional `PILOT_REGISTRY_ALLOWED_ORIGINS` and `PILOT_PAYMASTER_ALLOWED_ORIGINS` replace the shared list for their service. Omit these overrides to inherit the common list. Old localhost overrides copied from `.env.example` must be removed or adjusted on Vercel.
+
+In the other app, point its username client to `https://pilot.example/api/pilot` and its paymaster client to `https://pilot.example/api/paymaster`, using the same testnet deployment and pool pin. For an app based on the demo's Vite setup, use `VITE_PILOT_REGISTRY_URL=https://pilot.example/api/pilot` and `VITE_PILOT_PAYMASTER_URL=https://pilot.example/api/paymaster`. These frontend variable names are demo conventions; other integrations pass the URLs to the SDK clients. Adding a domain permits browser requests; it does not authorize unsupported contract transitions or expand user permissions. All apps share the configured pool limits; per-project credentials/accounting remain proposed V2 work.
 
 5. Deploy or redeploy after configuring the environment variables. Frontend variables are baked into the build. Use the configured app domain when testing.
 

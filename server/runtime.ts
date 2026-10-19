@@ -1,3 +1,4 @@
+import { appOrigins, allowedAppOrigins, pilotOrigin, socialAudience } from './origins.js';
 import type { RequestListener } from 'node:http';
 import { PostgresRegistryStore } from './registry-store.js';
 import { createRegistryHandler } from './registry.js';
@@ -21,25 +22,18 @@ export function rateLimiterFromEnvironment(): Promise<RateLimiter> {
   })().catch(error => { limiter = undefined; throw error; });
   return limiter;
 }
-function origin(value: string | undefined): string {
-  if (!value || new URL(value).origin !== value || !value.startsWith('https://')) throw new Error('Configure an exact HTTPS PILOT_APP_ORIGIN');
-  return value;
-}
-function origins(value: string | undefined, fallback: string) {
-  return (value ?? fallback).split(',').map(s => origin(s.trim()));
-}
 export type PilotService = 'pilot' | 'social' | 'paymaster';
 /** Lazy per-service initialization: registry/social requests never require the pool key. */
 export async function serverlessHandler(service: PilotService): Promise<RequestListener> {
   const database = databaseUrl();
   if (!database) throw new Error('Serverless Pilot requires DATABASE_URL or POSTGRES_URL; JSON fallback is disabled');
-  const appOrigin = origin(process.env.PILOT_APP_ORIGIN);
+  const apps = appOrigins();
   const rateLimiter = await rateLimiterFromEnvironment();
   if (service === 'pilot') {
     const network = process.env.PILOT_REGISTRY_NETWORK ?? 'ckb-testnet';
     if (!['ckb-testnet', 'ckb-mainnet'].includes(network)) throw new Error('Invalid registry network');
-    const registryOrigin = origin(process.env.PILOT_REGISTRY_ORIGIN ?? appOrigin);
-    const allowedOrigins = origins(process.env.PILOT_REGISTRY_ALLOWED_ORIGINS, appOrigin);
+    const registryOrigin = pilotOrigin(process.env.PILOT_REGISTRY_ORIGIN ?? apps[0]);
+    const allowedOrigins = allowedAppOrigins('REGISTRY');
     const store = new PostgresRegistryStore(database);
     try { await store.init(); }
     catch (error) { await store.close(); throw error; }
@@ -47,13 +41,13 @@ export async function serverlessHandler(service: PilotService): Promise<RequestL
       origin: registryOrigin, allowedOrigins, rateLimiter });
   }
   if (service === 'social') {
-    const audience = origin(process.env.PILOT_SOCIAL_AUDIENCE ?? appOrigin);
+    const audience = socialAudience();
     validateOffchainManifest(socialManifest(audience));
     const store = new PostgresSocialStore(database, audience);
     try { await store.init(); }
     catch (error) { await store.close(); throw error; }
     return createSocialHandler({ store, audience, rateLimiter });
   }
-  const allowedOrigins = origins(process.env.PILOT_PAYMASTER_ALLOWED_ORIGINS, appOrigin);
+  const allowedOrigins = allowedAppOrigins('PAYMASTER');
   return createPaymasterHandler({ paymaster: await paymasterFromEnvironment(), allowedOrigins, rateLimiter });
 }

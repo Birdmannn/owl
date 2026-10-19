@@ -66,14 +66,16 @@ test('Vercel cold-start failures are sanitized and retryable rather than caching
 });
 
 test('serverless requires PostgreSQL and explicit canonical origin; parsed request bodies retain byte limits', async () => {
+  const oldApps = process.env.PILOT_APP_ORIGINS;
   const oldPostgres = process.env.POSTGRES_URL;
   const oldDatabase = process.env.DATABASE_URL, oldOrigin = process.env.PILOT_APP_ORIGIN;
   try {
-    delete process.env.DATABASE_URL; delete process.env.POSTGRES_URL;
+    delete process.env.DATABASE_URL; delete process.env.POSTGRES_URL; delete process.env.PILOT_APP_ORIGINS;
     await assert.rejects(serverlessHandler('pilot'), /requires DATABASE_URL/);
     process.env.DATABASE_URL = 'postgresql://unused'; delete process.env.PILOT_APP_ORIGIN;
-    await assert.rejects(serverlessHandler('social'), /exact HTTPS/);
+    await assert.rejects(serverlessHandler('social'), /PILOT_APP_ORIGINS/);
   } finally {
+    if (oldApps === undefined) delete process.env.PILOT_APP_ORIGINS; else process.env.PILOT_APP_ORIGINS = oldApps;
     if (oldPostgres === undefined) delete process.env.POSTGRES_URL; else process.env.POSTGRES_URL = oldPostgres;
     if (oldDatabase === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldDatabase;
     if (oldOrigin === undefined) delete process.env.PILOT_APP_ORIGIN; else process.env.PILOT_APP_ORIGIN = oldOrigin;

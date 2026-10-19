@@ -34,3 +34,7 @@ Use a test database. This check was also run against an ephemeral local PostgreS
 The exported handlers serve `/api/pilot`, `/api/social`, and `/api/paymaster` through `api/index.ts` without calling `listen()`. The committed root `vercel.json` builds the demo and rewrites API routes. PostgreSQL is required in serverless mode; no JSON fallback is allowed. See [VERCEL.md](../VERCEL.md) for required environment variables, verification, concurrency guarantees and data migration boundaries.
 
 The Vercel/Neon integration variable `POSTGRES_URL` is also accepted by every service. `DATABASE_URL` takes precedence when both are set; use the same pooled connection for all instances sharing a pool. Keep either variable server-only.
+
+## Multiple integrating apps
+
+Set `PILOT_APP_ORIGINS=https://demo.example,https://other-app.example` to share the username and paymaster APIs with both browsers. The same variable works in standalone services and Vercel. Service-specific allowlists replace it if set; the old singular variable remains a fallback. Set a stable `PILOT_REGISTRY_ORIGIN` for username proof messages and explicitly set `PILOT_SOCIAL_AUDIENCE` to the bundled social demo origin. Social grants remain bound to that single sample app, and all apps still share pool budgets and script restrictions. See VERCEL.md for second-app SDK URLs.

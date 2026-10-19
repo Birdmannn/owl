@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .pilot/
+.pool/
 contracts/target/
 contracts/build/
 .env

@@ -98,7 +98,7 @@ export default function App() {
     },
     {
       id: 'supported-scope', title: 'What you can integrate today',
-      html: '<p>The SDK’s username lookup and CKB/Spore builders can be used by other apps today. The public testnet flight uses <code>counter-v1</code>. The new <a href="#cell-delegation">developer delegation API</a> supports named builders, selected subsets, and creation/migration under a reusable bounded-u64 policy verified on local CKB. Another app’s arbitrary contract actions need a compatible on-chain policy and adapter; installing the package alone does not add that authority.</p><p>For a complete interactive example of the current policy, open the testnet demo. It uses the same SDK and React modal packages you installed above.</p>',
+      html: '<p>The SDK’s username lookup and CKB/Spore builders can be used by other apps today. The public testnet flight uses <code>counter-v1</code>. The <a href="#cell-delegation">developer delegation API</a> supports named builders, selected subsets, and creation/migration under a reusable bounded-u64 policy on CKB testnet. Another app’s arbitrary contract actions need a compatible on-chain policy and adapter; installing the package alone does not add that authority.</p><p>For a complete interactive example of the current policy, open the testnet demo. It uses the same SDK and React modal packages you installed above.</p>',
       demo: true,
     },
   ],
