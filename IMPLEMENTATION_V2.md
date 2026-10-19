@@ -17,7 +17,7 @@ An optional server secret authenticates privileged developer operations and auth
 - Off-chain owner grants, session-signed actions, receiving-app verification, replay protection and revocation.
 - Vercel-compatible request handlers and PostgreSQL storage; standalone services can use JSON locally.
 
-Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, and `PilotProvider` are **new work proposed here**. The current React exports include `PilotModal` and `PilotAccountsProvider`; neither is the provider proposed below.
+Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, overlapping sessions with deferred recovery, and `PilotProvider` are **new work proposed here**. The current React exports include `PilotModal` and `PilotAccountsProvider`; neither is the provider proposed below.
 
 ## Credentials and authority
 
@@ -201,6 +201,35 @@ sequenceDiagram
 
 The existing optimistic engine still accepts prepared actions locally and renders immediately. A project token, quote or balance check does not mean chain confirmation or reserve funds several moves into the future. Backend errors retain the saved action for reconciliation; a definitive failure follows the existing rollback rules. Requoting must never change an unresolved signed transaction's identity without proof that it cannot settle.
 
+## Start another session while an older session settles
+
+**Proposed V2 behavior, not implemented in the current demo.** A user may explicitly authorize a new session without waiting for their previous session’s accepted actions to settle. Starting another session must not discard, overwrite, or recover the previous session’s cell or queue.
+
+Each session has its own ID, session key, approved manifest and permission subset, budget, durable queue, settlement journal, and current cell outpoint. The new session needs an independent compatible app cell and sufficient wallet capacity. Never fund it from an older session’s unresolved cell, reuse an unresolved owner input, or spend the same app cell from two queues. If an app requires a single shared state cell, its compatible policy must support independent sessions or the new session must wait for that cell to become available; this feature cannot bypass application contract rules.
+
+The modal offers **Start new session** separately from **End session & reclaim CKB**. Creating the new session requires fresh permission/budget review and owner authorization. After its setup confirms, new app actions go to the selected new session. The older session enters **Settling**: it accepts no new actions, while its existing queue continues to reconcile exact saved transactions. Settlement remains sequential within each session. Independent sessions may progress concurrently only when their inputs and app state do not conflict, with shared owner/project/pool limits enforced across them.
+
+Show an owner-filtered session list with permissions, remaining allowance, protected/recoverable capacity, queue count, transaction status, and retry/recovery controls for each session. All state and logs must bind project/app, network, verified owner, and session ID; changing the active session or account must not relabel another queue. A local queue count alone is not proof that a cell is safe to recover: reconcile submitted and uncertain setup/action transactions and check the current live cell first. A definitive rejection may roll back actions under the existing rules; never require an impossible action to confirm or silently discard unresolved work.
+
+Once an older session’s queue is resolved and its current cell is recoverable, mark it **Ready to reclaim**. The user can return later and approve **Reclaim CKB** without ending the new session. Recovery uses the old session’s current outpoint and original authority, preserves required app state, returns recoverable capacity under the contract rules, and records the receipt under that session. Network fees follow the applicable self-funded or sponsored recovery policy. Block new actions and competing recovery while recovery is in flight; persist its signed bytes before submission and retry the same transaction after interruptions. Reclaimed sessions become **Closed** only after confirmed recovery.
+
+Do not automatically reclaim a cell merely because a new session was created. Fresh owner consent is required for recovery. Token expiry, project suspension or switching the active session must preserve an authenticated path to reconcile and recover older sessions. Retain pending journals across reloads and provide session discovery/recovery metadata so older recoverable cells are not hidden by the newest session. Hosted records must never store raw session private keys or treat server-reported status as a substitute for chain verification. Discovery alone cannot resume an unsigned action when its browser-held signing key is unavailable; expose that limitation and a safe owner recovery path after resolving any submitted transactions.
+
+```mermaid
+flowchart TD
+    A[Session A has queued actions] --> B[User reviews and authorizes independent session B]
+    A --> S[A stops accepting new actions and keeps settling]
+    B --> C[B setup confirms and becomes selected]
+    C --> N[New actions use B]
+    S --> Q{A queue and uncertain transactions resolved?}
+    Q -->|No| R[Keep A journal and reconcile exact transactions]
+    R --> Q
+    Q -->|Yes| L[Check live A cell and show Ready to reclaim]
+    L --> U[User later signs recovery for A]
+    U --> F[Recovery confirms and A capacity returns]
+    F --> X[Close A; B remains independent]
+```
+
 ## PostgreSQL model and isolation
 
 Proposed additional tables:
@@ -215,6 +244,7 @@ Proposed additional tables:
 | `pilot_project_challenges` | One-time project/owner/session proofs with purpose and expiry |
 | `pilot_project_policies` | Sponsorship mode, eligible actions and operator-approved fee/usage limits |
 | `pilot_project_usage` | Atomic project/day and project-owner/day accounting |
+| `pilot_project_sessions` | Owner/project/app/network/session binding, manifest and grant references, cell identity/current outpoint, lifecycle, durable transaction/recovery references; no raw session private keys |
 | `pilot_project_audit` | Credential/settings changes and redacted action/transaction lifecycle events |
 
 Use cryptographically random, high-entropy secrets; store only digests and verify safely. Separate test credentials from any future mainnet credentials. New mainnet support needs explicit policy and deployment work; a key prefix must not enable it.
@@ -241,8 +271,9 @@ These controls do not revoke a copied on-chain session key. Existing contracts e
 2. Add public configuration and project challenge/token endpoints with wallet/session binding, expiry and suspension checks.
 3. Add project-aware hosted API authorization and atomic project-plus-pool accounting. Keep existing SDK signature/quote checks.
 4. Add `createPilotClient` and `PilotProvider`, retaining current explicit integration as a supported path during migration.
-5. Add dashboard creation/settings/usage/logs, then integrate the demo as a registered project.
-6. Update the web docs and installation examples only after these APIs are implemented and verified.
+5. Add owner-bound multiple-session storage, selection, background reconciliation, session discovery, and deferred recovery controls; verify independent cell/input handling and aggregate sponsorship limits.
+6. Add dashboard creation/settings/usage/logs, then integrate the demo as a registered project.
+7. Update the web docs and installation examples only after these APIs are implemented and verified.
 
 During migration, protect the old unscoped sponsorship endpoints or disable them for the managed pool. They must not remain an alternate route around project limits. Unresolved old signed transactions require a documented recovery path; do not discard their journal entries. Moving endpoints must preserve username mappings, social replay/revocation state, pool leases and fee accounting.
 
@@ -258,6 +289,11 @@ During migration, protect the old unscoped sponsorship endpoints or disable them
 - Expired/revoked credentials block new privileges while preserving authenticated recovery of already-signed transactions.
 - Dashboard users cannot read or modify another project's settings, secrets or private logs.
 - Permission expansion requires fresh consent; account switching cannot reuse another owner's token or session.
+- A user can authorize an independent session B while session A has unresolved actions; B never consumes A’s cell or unresolved owner inputs, and A continues reconciling its original queue.
+- Session selection, account switching and reloads preserve distinct owner/app/session queues, permissions, budgets and receipts; only the selected accepting session receives new actions.
+- An app requiring a shared state cell cannot start conflicting sessions without a compatible policy; concurrent independent sessions still respect owner/project/pool limits.
+- Once A’s queue and uncertain submissions are resolved, its recoverable capacity remains discoverable and reclaimable with owner approval while B continues independently.
+- Recovery is blocked by unresolved conflicting transactions, uses A’s verified current outpoint, retries exact saved bytes after interruption, and closes A only after confirmation. Repeated recovery cannot spend twice or affect B.
 - PostgreSQL failures fail closed, with no temporary-file fallback; local and Vercel integration tests cover authorization, concurrency and recovery.
 
 This is the intended V2 design. It does not claim the developer dashboard, credentials, tokens or proposed SDK exports are available in the current release.
