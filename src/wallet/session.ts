@@ -12,6 +12,7 @@ import {
 } from "./passkey.js";
 import {
   PILOT_WALLET_SESSION_CODE_HASH,
+  PILOT_LEGACY_PASSKEY_CODE_HASH,
   PILOT_PASSKEY_CODE_HASH,
 } from "./code.js";
 import {
@@ -142,7 +143,9 @@ export function pilotWalletLock(account: PilotWalletDescriptor): ccc.Script {
     type.codeHash !== PILOT_TYPE_ID ||
     type.hashType !== "type" ||
     ccc.bytesFrom(type.args).length !== 32 ||
-    owner.codeHash !== PILOT_PASSKEY_CODE_HASH ||
+    ![PILOT_PASSKEY_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH].includes(
+      owner.codeHash,
+    ) ||
     owner.hashType !== "data2" ||
     ccc.bytesFrom(owner.args).length !== 97 ||
     owner.eq(pool) ||

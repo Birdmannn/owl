@@ -1,6 +1,6 @@
 # Deploy Pilot on Vercel
 
-The repository can serve the demo and all three APIs from one Vercel project. The sponsored counter/delegation contracts have existing CKB testnet records in `deployments/pilot-sponsored.json`. The passkey-wallet contracts are also deployed on CKB testnet; the separate earlier persistent-account contract remains undeployed.
+The repository can serve the demo and all three APIs from one Vercel project. The sponsored counter/delegation contracts have existing CKB testnet records in `deployments/pilot-sponsored.json`. The original passkey owner and unchanged session contracts are deployed on CKB testnet; the embedded owner-lock revision still needs deployment; the separate earlier persistent-account contract remains undeployed.
 
 ## Two Vercel projects from the same repository
 
@@ -27,7 +27,7 @@ The independent wallet adds a third Vercel project rooted at `apps/wallet`, pres
 
 Choose a stable HTTPS wallet domain before creating durable passkeys. Set the wallet's `VITE_PILOT_PAYMASTER_URL` to the demo/backend's `/api/paymaster`; optional settings are `VITE_PILOT_WALLET_RPC` and `VITE_PILOT_WALLET_MAX_FEE`. Set `VITE_PILOT_WALLET_URL=https://wallet.example` on the demo. Include `https://wallet.example` in `PILOT_PAYMASTER_ALLOWED_ORIGINS` (or the inherited common list), because the wallet submits sponsorship requests. Do not host untrusted apps on the same origin as the wallet.
 
-Both `passkey` and `walletSession` deployment records must be configured before on-chain setup activates. The prepared explicit deployment target is `npm run paymaster:deploy -- wallet`; it spends code-cell capacity and must be reviewed/requested separately. See [PILOT_WALLET.md](PILOT_WALLET.md) for permissions, recovery, single-session and cross-device limits. Existing demo/backend and docs settings below remain in effect.
+Both `passkey` and `walletSession` records must match current SDK pins before embedded setup activates. The revised owner is deployed on testnet in transaction `0x771edc9c5daf2f2e4c40eac48e3fc909f943d9541d59c6863454ede0f015f8d3` (output 0); the existing session contract is reused. Rebuild and redeploy the wallet, backend and integrating apps with the updated repository deployment records. The original owner code cell was consumed to reclaim testnet capacity; its record is archived as `retiredPasskeyLegacy`, and `passkeyLegacy` is unset. Recovery through that consumed code dependency is unavailable. No old funds or identities migrate automatically. Deployment spends code-cell capacity separately from sponsorship. See [PILOT_WALLET.md](PILOT_WALLET.md) for permissions, recovery, single-session and cross-device limits. Existing demo/backend and docs settings below remain in effect.
 
 ### Demo/backend setup
 
@@ -114,3 +114,9 @@ The suite tests real PostgreSQL multi-instance competition, durable-before-broad
 Vercel references: [Node.js request handlers](https://vercel.com/docs/functions/runtimes/node-js) and [project configuration](https://vercel.com/docs/project-configuration/vercel-json).
 
 The Vercel/Neon integration variable `POSTGRES_URL` is also accepted by every service. `DATABASE_URL` takes precedence when both are set; use the same pooled connection for all instances sharing a pool. Keep either variable server-only.
+
+### Embedded wallet policy
+
+Apps use `PilotWalletProvider` to open an SDK modal containing the shared wallet iframe. No separate browser window opens. Allow the wallet origin in the app CSP `frame-src` (or fallback directive). If the app sends Permissions-Policy, permit `publickey-credentials-create` and `publickey-credentials-get` for the wallet origin as well as `self` where needed; the SDK sets the iframe `allow` attribute. A restrictive parent policy cannot be overridden by the SDK. A strict style CSP can pass a matching `styleNonce` to the provider.
+
+The wallet’s committed headers permit HTTPS embedding plus localhost development and remove `X-Frame-Options: DENY`. Check deployed response headers, including any project-wide overrides. Browser third-party storage/passkey support is required: storage may be partitioned by app or denied. The modal reports denied storage and fails closed; there is no popup fallback. Keep the iframe mounted while the modal is hidden to retain automatic signing. On navigation/reload, reconnect and reconcile saved transactions. Device/native passkey prompts are expected for owner operations. Do not put untrusted app code on the wallet origin.

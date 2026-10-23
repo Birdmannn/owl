@@ -1,6 +1,6 @@
 # Pilot V2: developer projects and hosted SDK API
 
-**Status: V2 roadmap, not implemented. Updated 2026-10-23.** The project/dashboard APIs, proposed `PilotProvider` and `createPilotClient`, hosted account discovery, and overlapping-session orchestration below remain proposals. The independent passkey wallet and its `PilotWalletProvider` already exist; they are the baseline, not proposed V2 APIs. This document does not grant new signing authority.
+**Status: V2 roadmap, not implemented. Updated 2026-10-23.** The project/dashboard APIs, proposed `PilotProvider` and `createPilotClient`, hosted account discovery, and overlapping-session orchestration below remain proposals. The independent embedded passkey wallet and its `PilotWalletProvider` already exist; they are the baseline, not proposed V2 APIs. This document does not grant new signing authority.
 
 ## Goal
 
@@ -11,9 +11,9 @@ An optional server secret authenticates privileged developer operations and auth
 ## What exists today
 
 - Existing-wallet connection, modal permission selection and compatible session signing; connection or permission checkboxes alone do not make an arbitrary owner-locked app automatically signable.
-- An independent Pilot wallet popup (`apps/wallet`) with native passkey creation/sign-in, multiple local accounts and switching, explicit app-origin/permission/budget review, logs, and owner recovery. JoyID is not required for this path.
+- An independent Pilot wallet embedded SDK modal (`apps/wallet`) with native passkey creation/sign-in, multiple local accounts and switching, explicit app-origin/permission/budget review, logs, and owner recovery. JoyID is not required for this path.
 - `PilotWalletProvider` and `PilotHostedSigner`: apps receive public account data and request actions over an origin/Window/channel-bound transport; session keys stay on the separate trusted wallet origin, not in integrating apps. Owner private keys stay in the passkey authenticator.
-- Passkey and restricted-session contracts deployed on CKB testnet in transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be` (outputs 0 and 1), with live code hashes verified on 2026-10-23. A real hardware-passkey/browser end-to-end testnet flow remains unverified.
+- Passkey and restricted-session contracts deployed on CKB testnet in transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be` (outputs 0 and 1), with the original live code hashes verified on 2026-10-23. The embedded SDK modal now replaces the browser popup, and its revised passkey owner contract is deployed in transaction `0x771edc9c5daf2f2e4c40eac48e3fc909f943d9541d59c6863454ede0f015f8d3` (output 0); the unchanged session contract is reused and the old owner code cell has been consumed to reclaim testnet capacity. Recovery through that consumed dependency is unavailable; the historical record is archived as `retiredPasskeyLegacy`. A real hardware-passkey/browser end-to-end testnet flow remains unverified.
 - One active session per passkey account, with contract-enforced cell policies, cumulative CKB allowance and owner-authorized replacement/revocation/recovery. Replacement preserves the account address while a live authority exists; closing that authority requires a new account identity for later grants. Expiry remains a wallet/verifier check, not an on-chain upper timestamp limit.
 - Compatible CKB session/delegation policies, with separate deployed testnet sponsored variants.
 - Username registration with verified wallet ownership and shared storage.
@@ -21,13 +21,13 @@ An optional server secret authenticates privileged developer operations and auth
 - Off-chain owner grants, session-signed actions, receiving-app verification, replay protection and revocation.
 - Vercel-compatible request handlers and PostgreSQL storage; standalone services can use JSON locally.
 
-Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, hosted cross-device account discovery/recovery metadata, overlapping sessions with deferred recovery, and `PilotProvider` are **new work proposed here**. Current React exports include `PilotModal` and `PilotAccountsProvider`; the core SDK also exports the implemented popup client `PilotWalletProvider`. None is the proposed project-aware React provider below. Local wallet labels are not globally registered Pilot usernames, and existing username records do not automatically discover or migrate passkey session accounts.
+Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, hosted cross-device account discovery/recovery metadata, overlapping sessions with deferred recovery, and `PilotProvider` are **new work proposed here**. Current React exports include `PilotModal` and `PilotAccountsProvider`; the core SDK also exports the implemented embedded client `PilotWalletProvider`. None is the proposed project-aware React provider below. Local wallet labels are not globally registered Pilot usernames, and existing username records do not automatically discover or migrate passkey session accounts.
 
 The wallet is deployed once on a stable HTTPS origin and shared by integrating apps. The demo/backend and docs remain separate deployments. Browser origin allowlists are the current service configuration; project credentials and a dashboard do not exist yet. See [PILOT_WALLET.md](PILOT_WALLET.md) for the implemented protocol and limits.
 
 ## Account creation, discovery and recovery to investigate
 
-**V2 research and design work, not implemented.** Users can already create another wallet directly in the popup, sign in and switch among accounts known to that wallet origin in the same browser. The missing feature is reliable account discovery and restoration on another browser/device, not wallet creation itself.
+**V2 research and design work, not implemented.** Users can already create another wallet directly in the modal, sign in and switch among accounts known to that wallet origin in the same available wallet storage partition. Browsers can partition embedded storage by app or block it; a shared URL does not guarantee a shared local account list. The missing feature is reliable account discovery and restoration on another browser/device, not wallet creation itself.
 
 Investigate these requirements before selecting a hosted directory protocol:
 
@@ -94,7 +94,7 @@ export function App() {
 
 - Load public project configuration from Pilot's hosted API; support an explicit `apiUrl` override for self-hosting and local testing.
 - Expose the hosted passkey wallet and supported existing-wallet/account/modal integrations through one project context, while preserving their distinct identity and authorization models.
-- Resolve the trusted wallet URL from reviewed configuration and keep passkey/session signing inside the wallet popup; the project-aware app provider must not import wallet-origin private keys.
+- Resolve the trusted wallet URL from reviewed configuration and keep passkey/session signing inside the isolated wallet iframe; the project-aware app provider must not import wallet-origin private keys.
 - Resolve username, social and paymaster service URLs automatically.
 - Check the configured network, manifest hash, supported contract deployments and current app origin.
 - Obtain/refresh scoped hosted API access when needed and attach project context to requests.
@@ -190,7 +190,7 @@ An explicitly enabled public sponsorship mode may support frontend-only apps. It
 sequenceDiagram
     participant Dev as Developer dashboard
     participant App as App and Pilot SDK
-    participant Wallet as Pilot wallet popup or supported owner wallet
+    participant Wallet as Pilot embedded wallet or supported owner wallet
     participant Backend as Developer backend (optional)
     participant API as Hosted Pilot API
     participant DB as PostgreSQL
@@ -306,7 +306,7 @@ During migration, protect the old unscoped sponsorship endpoints or disable them
 ## Acceptance criteria
 
 - A returning user on another supported browser/device can authenticate an available passkey and discover only their verified accounts, with network/identity bindings checked against chain state; credential IDs or names alone reveal no private directory records.
-- New wallet creation and account switching remain available in the shared popup; a local label is never silently promoted to a global username or used to retarget payments.
+- New wallet creation and account switching remain available in the shared modal; a local label is never silently promoted to a global username or used to retarget payments.
 - Restoring metadata neither exports owner/session private keys nor implies restored session signing; unavailable session keys lead to explicit replacement/recovery after uncertain transactions are reconciled.
 - Concurrent devices cannot use stale restored authority or missing local journals to bypass settlement and recovery checks. Loss of all owner credentials remains explicitly unsupported unless a separately reviewed recovery protocol is implemented.
 - A developer can create a project, publish its manifest, copy the public ID and connect an app without handling Pilot's database or pool secret.

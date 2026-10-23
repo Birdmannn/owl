@@ -107,3 +107,8 @@ test('board identifies passkey owners and wallet session actions without inventi
  const ownerPolicy=boardPolicies.find(p=>p.id==='passkey-v1');const owner=ccc.Script.from({codeHash:ownerPolicy.codeHash,hashType:'data2',args:'0x'+'22'.repeat(97)});tx.outputs[0].lock=owner;previous.outputs[0].lock=owner;tx.setWitnessArgs(0,{lock:'0x00'+'33'.repeat(300)});
  const next=await loadBoardPage();assert.equal(next.rows[0].action,'Passkey owner transaction');assert.equal(next.rows[0].signer,'Pilot passkey');assert.deepEqual(next.rows[0].details.ownerLockHashes,[owner.hash()]);assert.equal(next.rows[0].session,'');
 });
+
+test('board keeps original passkey owners visible after embedded owner revision',async t=>{
+ const {tx,previous}=fixture(t);const policy=boardPolicies.find(p=>p.id==='passkey-legacy');const owner=ccc.Script.from({codeHash:policy.codeHash,hashType:'data2',args:'0x'+'22'.repeat(97)});tx.outputs[0].lock=owner;previous.outputs[0].lock=owner;tx.setWitnessArgs(0,{lock:'0x00'+'33'.repeat(300)});
+ const {rows}=await loadBoardPage();assert.equal(rows[0].action,'Passkey owner transaction');assert.equal(rows[0].signer,'Pilot passkey');assert.deepEqual(rows[0].details.ownerLockHashes,[owner.hash()]);assert.equal(rows[0].session,'');
+});

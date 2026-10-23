@@ -102,13 +102,38 @@ fn passkey_sign(
     flags: u8,
     wrong_challenge: bool,
 ) -> TransactionView {
+    passkey_sign_context(
+        tx,
+        index,
+        sponsor,
+        origin,
+        flags,
+        wrong_challenge,
+        false,
+        None,
+    )
+}
+fn passkey_sign_context(
+    tx: TransactionView,
+    index: usize,
+    sponsor: Option<usize>,
+    origin: &str,
+    flags: u8,
+    wrong_challenge: bool,
+    cross_origin: bool,
+    top_origin: Option<&str>,
+) -> TransactionView {
     let prefix = [
         vec![0],
         (sponsor.unwrap_or(65535) as u16).to_le_bytes().to_vec(),
     ]
     .concat();
     let challenge = digest(&tx, index, sponsor, b"owl-pilot-passkey-v1", &prefix);
-    let json=serde_json::json!({"type":"webauthn.get","challenge":Base64UrlUnpadded::encode_string(if wrong_challenge{&[9;32]}else{&challenge}),"origin":origin,"crossOrigin":false}).to_string();
+    let mut data = serde_json::json!({"type":"webauthn.get","challenge":Base64UrlUnpadded::encode_string(if wrong_challenge{&[9;32]}else{&challenge}),"origin":origin,"crossOrigin":cross_origin});
+    if let Some(top) = top_origin {
+        data["topOrigin"] = serde_json::json!(top);
+    }
+    let json = data.to_string();
     let auth = [
         Sha256::digest(b"wallet.pilot.example").to_vec(),
         vec![flags],
@@ -686,4 +711,60 @@ fn session_at_nonzero_input_and_extra_witnesses_remain_bound() {
         .witness(Bytes::from(vec![3]))
         .build();
     assert!(verify(&f.c, &altered).is_err());
+}
+
+#[test]
+fn embedded_passkey_accepts_signed_secure_top_origin() {
+    let (c, tx) = root_fixture();
+    for top in ["https://fon.example", "http://localhost:5177"] {
+        verify(
+            &c,
+            &passkey_sign_context(tx.clone(), 0, Some(1), ORIGIN, 5, false, true, Some(top)),
+        )
+        .unwrap();
+    }
+}
+#[test]
+fn embedded_passkey_rejects_missing_insecure_or_contradictory_context() {
+    let (c, tx) = root_fixture();
+    for (cross, top) in [
+        (true, None),
+        (true, Some("null")),
+        (true, Some("http://evil.example")),
+        (true, Some("https://fon.example/path")),
+        (true, Some("https://fon.example@evil.example")),
+        (false, Some("https://fon.example")),
+    ] {
+        assert!(verify(
+            &c,
+            &passkey_sign_context(tx.clone(), 0, Some(1), ORIGIN, 5, false, cross, top)
+        )
+        .is_err());
+    }
+    let signed = passkey_sign_context(
+        tx,
+        0,
+        Some(1),
+        ORIGIN,
+        5,
+        false,
+        true,
+        Some("https://fon.example"),
+    );
+    let mut raw: Vec<Bytes> = signed
+        .witnesses()
+        .into_iter()
+        .map(|w| w.raw_data())
+        .collect();
+    let args = WitnessArgs::from_slice(&raw[0]).unwrap();
+    let lock = args.lock().to_opt().unwrap().raw_data();
+    let mut changed = lock.to_vec();
+    let start = changed.windows(3).position(|v| v == b"fon").unwrap();
+    changed[start..start + 3].copy_from_slice(b"bad");
+    raw[0] = args
+        .as_builder()
+        .lock(Some(Bytes::from(changed)).pack())
+        .build()
+        .as_bytes();
+    assert!(verify(&c, &witnesses(signed, raw)).is_err());
 }

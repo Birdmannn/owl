@@ -25,7 +25,9 @@ const signer = new ccc.SignerCkbPrivateKey(client, secret as ccc.Hex);
 const owner = (await signer.getRecommendedAddressObj()).script;
 const pool = (await ccc.Address.fromString(process.env.PILOT_PAYMASTER_ADDRESS ?? poolConfiguration.address, client)).script;
 const directory = resolve('.pilot/sponsored'); await mkdir(directory, { recursive: true, mode: 0o700 });
-const journalFile = directory + '/deployment-' + selected + '.json';
+// A revised owner binary must not reuse the previous wallet deployment's signed bytes.
+const revision = ['wallet', 'passkey'].includes(selected) ? '-' + PILOT_PASSKEY_CODE_HASH.slice(2, 14) : '';
+const journalFile = directory + '/deployment-' + selected + revision + '.json';
 try { await writeFile(journalFile, '{}', { flag: 'wx', mode: 0o600 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
 const configFile = resolve('deployments/pilot-sponsored.json');
 const release = await lockfile.lock(configFile);
@@ -55,7 +57,14 @@ try {
     } else {
       tx = ccc.Transaction.from({ outputs: pending.map(() => ({ lock: owner })), outputsData: pending.map(spec => spec.code) });
       console.log('Deploying', pending.map(spec => spec.kind).join(', '), 'with', ccc.fixedPointToString(tx.outputs.reduce((n, output) => n + output.capacity, 0n)), 'CKB code-cell capacity plus the deployment fee.');
-      await tx.completeInputsByCapacity(signer); await tx.completeFeeBy(signer, 1000n);
+      await tx.completeInputsByCapacity(signer);
+      await tx.completeFee(signer, (candidate, capacity) => {
+        // Preserve sub-minimum change in the deployer-owned code cell instead
+        // of requiring another top-up or paying the remainder as a fee.
+        if (capacity < ccc.fixedPointFrom(61)) candidate.outputs[0]!.capacity += capacity;
+        else candidate.addOutput({ lock: owner, capacity });
+        return 0n;
+      }, 1000n);
       tx = await signer.signTransaction(tx);
       record = { bytes: ccc.hexFrom(tx.toBytes()) };
       await writeFile(journalFile + '.tmp', JSON.stringify(record), { mode: 0o600 }); await rename(journalFile + '.tmp', journalFile);

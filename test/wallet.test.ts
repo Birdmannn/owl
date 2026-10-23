@@ -32,6 +32,7 @@ import {
   type PilotCellPolicy,
 } from "../src/wallet/session.js";
 import {
+  PILOT_LEGACY_PASSKEY_CODE_HASH,
   PILOT_PASSKEY_CODE_HASH,
   PILOT_WALLET_SESSION_CODE_HASH,
 } from "../src/wallet/code.js";
@@ -43,6 +44,7 @@ import type { Deployment } from "../src/ckb/counter.js";
 const h = (n: number) => ccc.hexFrom(new Uint8Array(32).fill(n)),
   zero = h(0);
 const passkey: PilotPasskey = {
+  codeHash: PILOT_PASSKEY_CODE_HASH,
   credentialId: base64url(new Uint8Array([1, 2, 3])),
   publicKey: ccc.hexFrom(p256.getPublicKey(ccc.bytesFrom(h(3)), true)),
   rpId: "wallet.pilot.example",
@@ -709,4 +711,22 @@ test("an oversized replacement policy state is rejected before asking the passke
   );
   assert.equal(f.signs, 1);
   assert.equal(f.journal.receipts.length, 1);
+});
+
+test("embedded assertions bind the signed top origin and preserve legacy account addresses", () => {
+  const top = "https://fon.example";
+  const proof = assertion(h(1), { crossOrigin: true, topOrigin: top });
+  assert.equal(verifyPilotAssertion(passkey, h(1), proof, top), true);
+  assert.equal(verifyPilotAssertion(passkey, h(1), proof, "https://evil.example"), false);
+  assert.equal(verifyPilotAssertion(passkey, h(1), assertion(h(1)), top), false);
+  for (const topOrigin of [undefined, "null", "http://evil.example", "https://fon.example/path", "https://fon.example@evil.example"]) {
+    assert.equal(verifyPilotAssertion(passkey, h(1), assertion(h(1), { crossOrigin: true, topOrigin })), false);
+  }
+  assert.equal(verifyPilotAssertion(passkey, h(1), assertion(h(1), { topOrigin: top })), false);
+  const old = { ...passkey, codeHash: PILOT_LEGACY_PASSKEY_CODE_HASH };
+  assert.equal(verifyPilotAssertion(old, h(1), proof, top), false);
+  assert.equal(verifyPilotAssertion(old, h(1), assertion(h(1))), true);
+  const {codeHash, ...originalDescriptor} = passkey;
+  assert.equal(pilotPasskeyLock(parsePilotPasskey(originalDescriptor)).codeHash, PILOT_LEGACY_PASSKEY_CODE_HASH);
+  assert.notEqual(pilotPasskeyLock(old).hash(), pilotPasskeyLock(passkey).hash());
 });

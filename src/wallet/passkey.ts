@@ -6,7 +6,10 @@ import {
   verifyDeployment,
   type Deployment,
 } from "../ckb/counter.js";
-import { PILOT_PASSKEY_CODE_HASH } from "./code.js";
+import {
+  PILOT_PASSKEY_CODE_HASH,
+  PILOT_LEGACY_PASSKEY_CODE_HASH,
+} from "./code.js";
 
 export interface PilotPasskey {
   credentialId: string;
@@ -14,6 +17,8 @@ export interface PilotPasskey {
   rpId: string;
   origin: string;
   name: string;
+  /** Missing in original descriptors: parse as the legacy top-level-only lock. */
+  codeHash?: ccc.Hex;
 }
 export interface PilotAssertion {
   authenticatorData: ccc.Hex;
@@ -42,6 +47,7 @@ export function parsePilotPasskey(value: unknown): PilotPasskey {
     rpId: v.rpId,
     origin: v.origin,
     name: v.name,
+    codeHash: v.codeHash ?? PILOT_LEGACY_PASSKEY_CODE_HASH,
   };
   pilotPasskeyLock(p);
   return p;
@@ -92,8 +98,15 @@ export function pilotPasskeyLock(passkey: PilotPasskey): ccc.Script {
   const key = ccc.bytesFrom(passkey.publicKey);
   if (key.length !== 33) throw new Error("Use a compressed P-256 key");
   p256.Point.fromBytes(key);
+  const codeHash = passkey.codeHash ?? PILOT_PASSKEY_CODE_HASH;
+  if (
+    ![PILOT_PASSKEY_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH].includes(
+      codeHash,
+    )
+  )
+    throw new Error("Unsupported passkey lock");
   return ccc.Script.from({
-    codeHash: PILOT_PASSKEY_CODE_HASH,
+    codeHash,
     hashType: "data2",
     args: ccc.hexFrom(
       ccc.bytesConcat(
@@ -104,7 +117,7 @@ export function pilotPasskeyLock(passkey: PilotPasskey): ccc.Script {
     ),
   });
 }
-/** Called on the Pilot wallet's top-level origin, never inside the integrating app. */
+/** Called on the isolated Pilot wallet origin, including its embedded SDK frame. */
 export async function createPilotPasskey(name: string): Promise<PilotPasskey> {
   if (!name.trim() || name.length > 64)
     throw new Error("Choose an account name (1–64 characters)");
@@ -155,6 +168,7 @@ export async function createPilotPasskey(name: string): Promise<PilotPasskey> {
     rpId,
     origin,
     name,
+    codeHash: PILOT_PASSKEY_CODE_HASH,
   };
   pilotPasskeyLock(passkey);
   return passkey;
@@ -162,9 +176,22 @@ export async function createPilotPasskey(name: string): Promise<PilotPasskey> {
 export async function requestPilotAssertion(
   passkey: PilotPasskey,
   challenge: ccc.Hex,
+  expectedTopOrigin?: string,
 ): Promise<PilotAssertion> {
   if (location.origin !== passkey.origin)
     throw new Error("Passkey signing must run on its Pilot wallet origin");
+  if (window.self !== window.top && !expectedTopOrigin)
+    throw new Error(
+      "Embedded passkey signing requires a verified parent origin",
+    );
+  if (
+    expectedTopOrigin &&
+    (passkey.codeHash ?? PILOT_PASSKEY_CODE_HASH) ===
+      PILOT_LEGACY_PASSKEY_CODE_HASH
+  )
+    throw new Error(
+      "This account uses the original top-level-only lock. Open the trusted wallet directly to recover; create a new embedded account for this app.",
+    );
   const credential = (await navigator.credentials.get({
     publicKey: {
       rpId: passkey.rpId,
@@ -193,7 +220,7 @@ export async function requestPilotAssertion(
       ),
     ),
   };
-  if (!verifyPilotAssertion(passkey, challenge, assertion))
+  if (!verifyPilotAssertion(passkey, challenge, assertion, expectedTopOrigin))
     throw new Error("Invalid passkey assertion");
   return assertion;
 }
@@ -201,6 +228,7 @@ export function verifyPilotAssertion(
   passkey: PilotPasskey,
   challenge: ccc.Hex,
   assertion: PilotAssertion,
+  expectedTopOrigin?: string,
 ): boolean {
   try {
     pilotPasskeyLock(passkey);
@@ -223,7 +251,11 @@ export function verifyPilotAssertion(
       data.type !== "webauthn.get" ||
       data.challenge !== base64url(ccc.bytesFrom(challenge)) ||
       data.origin !== passkey.origin ||
-      (data.crossOrigin !== undefined && data.crossOrigin !== false)
+      !validPilotClientContext(
+        data,
+        passkey.codeHash ?? PILOT_PASSKEY_CODE_HASH,
+        expectedTopOrigin,
+      )
     )
       return false;
     return p256.verify(
@@ -235,6 +267,30 @@ export function verifyPilotAssertion(
   } catch {
     return false;
   }
+}
+/** The signed topOrigin must match the actual parent in the wallet UI, not a caller's label. */
+function validPilotClientContext(
+  data: { crossOrigin?: unknown; topOrigin?: unknown },
+  codeHash: ccc.Hex,
+  expectedTopOrigin?: string,
+): boolean {
+  if (data.crossOrigin === true) {
+    if (
+      codeHash === PILOT_LEGACY_PASSKEY_CODE_HASH ||
+      typeof data.topOrigin !== "string"
+    )
+      return false;
+    canonicalWalletOrigin(data.topOrigin);
+    return (
+      !expectedTopOrigin ||
+      data.topOrigin === canonicalWalletOrigin(expectedTopOrigin)
+    );
+  }
+  return (
+    (data.crossOrigin === undefined || data.crossOrigin === false) &&
+    data.topOrigin === undefined &&
+    !expectedTopOrigin
+  );
 }
 export function pilotPasskeyDigest(
   value: ccc.TransactionLike,
@@ -296,7 +352,7 @@ export class PilotPasskeySigner extends ccc.Signer {
     readonly poolLock?: ccc.ScriptLike,
   ) {
     super(client);
-    if (deployment.codeHash !== PILOT_PASSKEY_CODE_HASH)
+    if (deployment.codeHash !== (passkey.codeHash ?? PILOT_PASSKEY_CODE_HASH))
       throw new Error("Unsupported passkey deployment");
     pilotPasskeyLock(passkey);
   }
@@ -346,7 +402,7 @@ export class PilotPasskeySigner extends ccc.Signer {
     const index = await this.position(tx);
     tx.setWitnessArgs(index, {
       ...tx.getWitnessArgs(index),
-      lock: ccc.hexFrom(new Uint8Array(71 + 37 + 512)),
+      lock: ccc.hexFrom(new Uint8Array(71 + 1024 + 2048)),
     });
     return tx;
   }

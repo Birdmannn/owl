@@ -21,9 +21,9 @@
   "passkey": {
     "network": "testnet",
     "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
-    "codeHash": "0x1ed0479cc0f57f0f5bc340c3739a78802f5f66ad59cb647a6cedc78a62a3fdaa",
+    "codeHash": "0x2ba431b27a844a3664e24c548ecd175cea3ba005590f4f362bee5a94acac92e6",
     "outPoint": {
-      "txHash": "0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be",
+      "txHash": "0x771edc9c5daf2f2e4c40eac48e3fc909f943d9541d59c6863454ede0f015f8d3",
       "index": 0
     }
   },
@@ -36,10 +36,22 @@
       "index": 1
     }
   },
-  "status": "Sponsored code cells deployed; run the pool service and configure the demo URL to activate fee sponsorship.",
+  "status": "Revised embedded passkey owner and unchanged wallet session code cells deployed on testnet; legacy owner retired. Rebuild/redeploy wallet, backend and apps with these records and configure sponsorship.",
   "poolLock": {
     "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
     "hashType": "type",
     "args": "0xc69e1b216b26d27f8ecc54b8ff473643ffec43a7"
+  },
+  "passkeyLegacy": null,
+  "retiredPasskeyLegacy": {
+    "network": "testnet",
+    "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+    "codeHash": "0x1ed0479cc0f57f0f5bc340c3739a78802f5f66ad59cb647a6cedc78a62a3fdaa",
+    "outPoint": {
+      "txHash": "0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be",
+      "index": 0
+    },
+    "status": "consumed",
+    "reclamationTxHash": "0x6843ea0f8c10d310ebd2b647028c709f3280b062295cbf4e9b431a06d510b173"
   }
 }

@@ -111,3 +111,22 @@ footer { display: flex; justify-content: space-between; gap: 14px; padding: 20px
 }
 .policy-help summary { font-size: 11px; color: #b3c6a4; }
 .policy-help p { font-size: 11px; margin-top: 0; }
+
+/* The signer remains mounted when the parent modal is hidden. */
+.embedded main { padding: 0 20px; }
+.embedded .wallet-header { height: 68px; }
+.embedded .intro { padding: 22px 0 18px; }
+.embedded h1 { font-size: 30px; letter-spacing: -1.3px; }
+.embedded .workspace { grid-template-columns: minmax(0, 1fr); }
+.embedded .trust-strip { padding-bottom: 16px; font-size: 9px; gap: 9px 16px; }
+.storage-note { font-size: 11px; color: #b8c9a5; }
+.owner-review { color-scheme: dark; color: #ecf0e5; background: #192e23; border: 1px solid #698450; border-radius: 12px; padding: 22px; width: calc(100% - 30px); max-width: 480px; max-height: calc(100dvh - 30px); overflow: auto; }
+.owner-review::backdrop { background: #06110cd9; }
+.owner-review pre { line-height: 1.8; font-size: 12px; }
+
+.embedded .intro { padding: 16px 0 12px; }
+.embedded .intro .eyebrow, .embedded .trust-strip { display: none; }
+.embedded .intro h1 { font-size: 27px; margin: 0 0 8px; }
+.embedded .intro p { font-size: 12px; }
+.embedded .preview-note { margin-bottom: 14px; }
+.embedded .preview-note summary { padding: 11px 0; }

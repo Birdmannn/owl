@@ -1,6 +1,26 @@
+## Latest update: revised owner deployed (2026-10-23)
+
+User funded the remaining deployment amount with 350 CKB, confirmed transfer `0xe69e41fae08664b6abca387f7b99082247ac1af3d2d802db73e6fe765c45c10f`. Ran `npm run paymaster:deploy -- passkey`; committed deployment `0x771edc9c5daf2f2e4c40eac48e3fc909f943d9541d59c6863454ede0f015f8d3`, output 0. Revised owner code hash matches SDK pin `0x2ba431b27a844a3664e24c548ecd175cea3ba005590f4f362bee5a94acac92e6`. Session deployment reused. `passkey` is configured; legacy remains retired. Deployment fee 0.00085451 CKB; code cell holds 85,118.99521939 CKB. The deployer has no ordinary change from this transaction: the script now preserves sub-61 CKB change in output 0 rather than requiring another top-up or burning it as a fee. Signed deployment is journaled under ignored `.pilot/sponsored/deployment-passkey-2ba431b27a84.json`.
+
+Next: rebuild/redeploy static wallet, demo/backend and integrating apps using the updated deployment metadata/SDK. Configure stable wallet URL and sponsorship origins. No remote Vercel deployment, commit/push or hardware-passkey public-chain end-to-end test performed. Earlier deployment-pending notes below are historical.
+
+## Latest update: legacy owner capacity reclaimed (2026-10-23)
+
+User explicitly authorized consuming the previous testnet owner code cell. Confirmed transaction: `0x6843ea0f8c10d310ebd2b647028c709f3280b062295cbf4e9b431a06d510b173`. Reclaimed 83,837 CKB to the deployer, less a 0.00000508 CKB transaction fee. Deployer balance after confirmation: 84,768.9960739 CKB. Revised owner requires 85,069 CKB plus fee: still short 300.0039261 CKB plus fee; a 350 CKB top-up is sufficient headroom. No revised contract was deployed. Original session code cell was not spent.
+
+`passkeyLegacy` is now null; original public deployment metadata is archived as `retiredPasskeyLegacy` with reclamation transaction. Accounts depending on the consumed old code cell cannot spend/recover through it while unavailable. Earlier notes below describing a live legacy recovery deployment are historical and superseded by this update. Do not retry the reclamation or restore the consumed outpoint as active. Exact signed reclamation bytes are journaled at ignored `.pilot/sponsored/reclaim-legacy-owner.json`.
+
 # Pilot session handoff
 
 Updated: 2026-10-21 (Africa/Lagos).
+
+## Embedded modal update (2026-10-23)
+
+User requires the wallet inside an SDK modal, with no browser popup. `PilotWalletProvider` now owns a dark native dialog and isolated wallet iframe, checks actual source/origin/channel, delegates WebAuthn, and exposes `open()`/`hide()`. Confirmation hides the modal without unloading the signer; disconnect settles before teardown and retains the frame on failure. `dispose()` remains local teardown only. Wallet peers with its actual parent, checks signed topOrigin against that origin, uses in-frame owner review instead of window.confirm, and reports blocked storage. Browser storage may be partitioned by embedding app. No popup fallback or hosted discovery exists.
+
+The revised passkey lock permits signed secure embedded context; it has a NEW hash. Current pin: `0x2ba431b27a844a3664e24c548ecd175cea3ba005590f4f362bee5a94acac92e6`; stripped binary 85,008 bytes. The standard deployer lock needs about 85,069 test CKB of code-cell capacity plus fee. `deployments/pilot-sponsored.json` deliberately sets `passkey: null`, preserves old deployment as `passkeyLegacy`, and retains the unchanged `walletSession`. Deploy only the revised owner with `npm run paymaster:deploy -- passkey` when requested/funded; no deployment was performed by this revision. Deployment journals include the owner-code revision. Old descriptors missing codeHash resolve to the legacy owner, preserving addresses, and can recover through direct trusted-wallet access. New passkeys explicitly pin the revised hash. There is no automatic funds/app-identity migration. Do not overwrite the legacy record or claim embedded public-chain success.
+
+Wallet framing headers now permit HTTPS and local apps; X-Frame-Options DENY is removed. Apps must allow frame-src and delegated WebAuthn features, and strict style CSP can use provider styleNonce. A malicious host can overlay its frame; this is not trusted-display protection. Rebuild/redeploy wallet, backend and integrating apps after revised deployment. README, web docs, architecture, hosting and security notes track this change. Earlier popup/deployment notes below are historical. Validation: SDK/server 100 passed and 5 PostgreSQL skips; 58 contract VM tests; 15 docs tests; 6 wallet browser tests including cross-site virtual WebAuthn, modal lifecycle, failed disconnect and denied storage. Wallet/docs/demo/SDK/React production builds pass. Final demo regression suite: 14 passed. Modal visual checks at 1200, 390 and 320 px passed with dark mode forced even under a light system preference. Demo reconnect regression accepts CCC restoring an already verified owner while the chooser changes, without bypassing explicit unchecked permissions.
 
 ## Deployment update: 2026-10-23
 

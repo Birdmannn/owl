@@ -1,14 +1,18 @@
 # Pilot passkey wallet
 
-Implemented locally on 2026-10-21. This is a separate wallet architecture alongside the existing external-wallet and broad-key account APIs. It is a testnet preview; its two contracts are deployed on CKB testnet, with live code hashes verified on 2026-10-23. A live hardware-passkey testnet flow is not yet verified.
+Implemented locally on 2026-10-21. This is a separate wallet architecture alongside the existing external-wallet and broad-key account APIs. It is a testnet preview; the original owner and session contracts were deployed on CKB testnet and verified on 2026-10-23. The embedded-modal revision needs a new passkey owner-lock deployment; the session contract is unchanged. A live hardware-passkey testnet flow is not yet verified.
 
 ## Ownership and isolation
 
 Pilot owns its authentication experience. `createPilotPasskey` creates an ES256 discoverable passkey with mandatory user verification on the **Pilot wallet origin**. The owner private key stays with the authenticator. The public credential ID, public key, RP ID, exact origin and account label are stored as metadata. No JoyID account is required.
 
-`apps/wallet` runs as a separate, top-level popup. `PilotWalletProvider` connects an app to it using messages bound to the exact wallet origin, actual popup/opener Window and a random channel. Users explicitly review the requesting browser origin, select policies and approve a spending amount. Requests cannot choose a different paymaster or RPC: those come from the wallet's own configuration. No owner or session private keys cross the transport. Untrusted app names/policies are rendered as text, not HTML.
+`apps/wallet` is hosted on its own trusted origin and embedded as an iframe inside an SDK-owned dark modal over the integrating app. No new browser window opens. `PilotWalletProvider` connects an app to it using messages bound to the exact wallet origin, actual iframe/parent Window and a random channel. Users explicitly review the requesting browser origin, select policies and approve a spending amount. Requests cannot choose a different paymaster or RPC: those come from the wallet's own configuration. No owner or session private keys cross the transport. Untrusted app names/policies are rendered as text, not HTML.
 
-The popup avoids third-party iframe storage and embedded-WebAuthn restrictions. It must remain open for this transport to work; reconnect after closing it. An iframe/headless/mobile transport is not included.
+`PilotWalletProvider.connect()` opens the modal. Users select/create an account, complete the device passkey prompt, review unchecked app policies and a budget, and authorize the exact grant using an in-frame review dialog and passkey. After chain confirmation the modal hides automatically. Its iframe remains mounted so approved actions continue without owner prompts. `provider.open()` reopens the account controls; `provider.hide()` and the Close/Escape controls hide the UI without ending the session. `disconnect()` waits for saved signed transactions to settle before removing the signer. If settlement fails, the connection remains available for reconciliation. `dispose()` is local teardown, not on-chain revocation or proof that pending work settled.
+
+The integrating app must be a top-level page. The SDK delegates `publickey-credentials-create` and `publickey-credentials-get` to the wallet frame. App CSP must permit that origin in `frame-src` (or its fallback); app Permissions-Policy must not block those features. With a strict style CSP, pass `styleNonce` for the SDK modal stylesheet. The wallet response allows HTTPS embedding and local development, rather than sending `X-Frame-Options: DENY`. The native device passkey prompt remains part of authentication; it is not a wallet popup.
+
+Embedded storage/passkey support depends on the browser. Storage can be partitioned by the top-level site or blocked entirely; a shared wallet URL does not guarantee shared account discovery across apps. Metadata/receipts stay in the available wallet storage partition; passkey sync does not sync those records. Restore with the public descriptor and original passkey when needed. Blocked storage is reported and wallet actions fail closed. There is no popup fallback, Storage Access API workflow or hosted discovery service in this implementation.
 
 ## Contracts and authorization
 
@@ -17,7 +21,7 @@ The popup avoids third-party iframe storage and embedded-WebAuthn restrictions. 
 `contracts/passkey-lock` pins a compressed P-256 public key, SHA-256 RP ID hash and SHA-256 exact-origin hash. A spend verifies:
 
 - The WebAuthn assertion's RP hash, user-presence and user-verification flags.
-- `webauthn.get`, the expected challenge, exact origin and no cross-origin assertion.
+- `webauthn.get`, the expected challenge, exact wallet origin, and signed embedding context. Cross-origin assertions require a secure serialized `topOrigin`; the wallet also checks it equals its verified actual parent app origin. Top-level assertions must not contain a contradictory `topOrigin`. The on-chain owner lock authenticates the wallet credential and transaction; it does not maintain a registry of permitted apps.
 - A real ES256 signature over authenticator data and the client-data hash.
 - A domain-separated transaction digest covering the raw transaction and every witness, preserving type fields. Only the owner signature and explicitly designated final sponsor signature are normalized.
 
@@ -46,7 +50,7 @@ sequenceDiagram
     participant P as Owner passkey authenticator
     participant C as CKB account and TYPE_ID state
     participant M as Paymaster
-    A->>W: Open wallet; request policies and budget
+    A->>W: Embed isolated wallet in SDK modal; request policies and budget
     W->>P: Create or authenticate Pilot passkey
     P-->>W: Public credential / verified assertion
     W->>W: Show actual app origin and unchecked policies
@@ -57,7 +61,8 @@ sequenceDiagram
     W->>W: Persist signed receipt before submission
     W->>M: Submit; validate and co-sign fee input
     M->>C: Confirm singleton state and account funding
-    W-->>A: Public address and connection
+    W-->>A: Public address and confirmed connection
+    A->>A: Hide modal; retain mounted signer iframe
     A->>W: Prepare app effects; send stable request ID
     W->>W: Check app, current state, policies and budget
     W->>M: Quote exact transaction
@@ -80,7 +85,7 @@ import { ccc } from '@ckb-ccc/core';
 import { PilotWalletProvider, PilotHostedSigner } from '@owl/pilot';
 
 const provider = new PilotWalletProvider({ url: 'https://wallet.example' });
-// Call from a click handler so the browser allows the popup.
+// Call from the Connect wallet button. No browser popup opens.
 const connection = await provider.connect({
   name: 'My app',
   budget: ccc.fixedPointFrom(200).toString(),
@@ -90,13 +95,15 @@ const signer = new PilotHostedSigner(new ccc.ClientPublicTestnet(), provider);
 // Start with requested app effects; the wallet adds its authority successor/change.
 const tx = await signer.prepareTransaction(appTransaction);
 const hash = await signer.sendTransaction(tx, `purchase:${purchaseId}`);
+// Reopen the account from your connected-account button: provider.open().
+// Close/hide retains signing; disconnect settles before removing the frame.
 // Persist the prepared bytes and stable ID; retry those exact values after response loss.
 const logs = await provider.request('logs');
 ```
 
 Builders still supply app dependencies, assets, business rules and app-specific witnesses. Do not call generic input completion before the hosted wallet prepares its authority/change. Do not prepare a different transaction on a retry. The app still manages optimistic rendering and its durable accepted-but-unsigned queue. `prepare` may settle a prior signed request before constructing the next one; instant UI acceptance remains the app's responsibility.
 
-`PilotWalletSession` is the trusted-wallet implementation, not an app-side key store. Its methods include grant, send, resume, stop, revoke and recover. All signed receipts are saved before service submission, uncertain outcomes block later spending, and stable IDs reject changed requests. A new session replaces the existing one only after saved receipts settle. Old app connections cannot sign, prepare effects, read another app’s receipts or stop its replacement through the popup protocol. The wallet profile shows all account receipts; app RPC logs are filtered to the requesting origin. Local disconnect stops new signatures and settles saved signed/submitted receipts before closing; use on-chain revoke to remove cryptographic session authority.
+`PilotWalletSession` is the trusted-wallet implementation, not an app-side key store. Its methods include grant, send, resume, stop, revoke and recover. All signed receipts are saved before service submission, uncertain outcomes block later spending, and stable IDs reject changed requests. A new session replaces the existing one only after saved receipts settle. Old app connections cannot sign, prepare effects, read another app’s receipts or stop its replacement through the iframe protocol. The wallet profile shows all account receipts; app RPC logs are filtered to the requesting origin. Local disconnect stops new signatures and settles saved signed/submitted receipts before removing the signer iframe; use on-chain revoke to remove cryptographic session authority.
 
 ## Scoped off-chain actions
 
@@ -115,7 +122,9 @@ npm run dev --prefix apps/wallet
 
 Wallet development origin: `http://localhost:5176`; demo: `http://127.0.0.1:5174`; docs retain their existing port. Set `VITE_PILOT_WALLET_URL` in the demo to the wallet's exact URL. The wallet needs `VITE_PILOT_PAYMASTER_URL`; optionally `VITE_PILOT_WALLET_RPC` and `VITE_PILOT_WALLET_MAX_FEE`. The configured deployment pool must match. Add the **wallet origin** to the paymaster's browser-origin allowlist, because that origin submits sponsored requests. Apps communicate with the wallet; they do not receive a pool secret.
 
-Both records in `deployments/pilot-sponsored.json` point to committed testnet transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be`: passkey output 0 and walletSession output 1. Their live code cells and hashes were verified on 2026-10-23. Publish these records with the wallet and backend builds. Code-cell capacity is separate from user budgets and ongoing fee sponsorship.
+The original testnet transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be` remains historical: original owner output 0 and live `walletSession` output 1. The old owner code cell was consumed on 2026-10-23 to reclaim 83,837 test CKB in transaction `0x6843ea0f8c10d310ebd2b647028c709f3280b062295cbf4e9b431a06d510b173`. Its record is archived as `retiredPasskeyLegacy`, and `passkeyLegacy` is unset. The original owner lock rejects embedded assertions. The revised `passkey` contract is now deployed in transaction `0x771edc9c5daf2f2e4c40eac48e3fc909f943d9541d59c6863454ede0f015f8d3` (output 0). Its live code hash matches the SDK pin; the session contract is reused. Deployment used `npm run paymaster:deploy -- passkey`. The fee was 0.00085451 CKB; the code cell holds 85,118.99521939 CKB, preserving the sub-minimum change under the deployer lock. Deployment journals include the owner-code revision to avoid reusing the original deployment’s signed transaction.
+
+Old passkey descriptors without a code hash resolve to the original lock, preserving funding addresses. New descriptors explicitly pin the revised hash. Existing owners can export/import metadata, but recovery through the consumed old deployment is unavailable. The old lock also cannot authorize assertions inside an app iframe. Do not treat this as automatic migration of funds, app ownership or accounts. New embedded accounts have new owner/session identities. Publish new deployment metadata and rebuild wallet/backend/apps after activation. Code-cell capacity is separate from user budgets and sponsorship.
 
 For Vercel, add a third project rooted at `apps/wallet` using its `vercel.json`, with access to sources outside the root. Keep demo/backend and docs as their existing separate projects. Use a stable wallet domain before registering durable passkeys; passkeys are RP-bound and changing domains is not automatic migration. No database credentials or private keys belong in this static wallet project.
 
@@ -124,17 +133,21 @@ For Vercel, add a third project rooted at `apps/wallet` using its `vercel.json`,
 - Owner keys remain in the authenticator. Session private keys remain in browser storage **on the wallet origin**. The integrating app cannot read them across origins, but a compromised wallet origin can use an active session key within its on-chain grant. This is not hardware isolation for session keys. A compromised wallet approval UI can also misrepresent an owner operation; WebAuthn verifies the origin/user and challenge, not a transaction amount on a separate trusted display.
 - One active on-chain session per account. Multiple independent grants, overlapping session settlement and app-isolated sub-budgets are not implemented. Replacing a session invalidates the old key when the replacement commits.
 - No trustworthy on-chain upper timestamp bound is claimed. Expiry is wallet/verifier enforcement; a copied key can still act under its remaining on-chain policies until revoked or exhausted. Use on-chain revocation for cryptographic invalidation.
-- Metadata/account discovery is shared across apps using the same wallet origin in the same browser. Passkey synchronization does not synchronize browser metadata or receipts. Import the public recovery descriptor on another device with access to its passkey. No hosted credential directory or globally enforced usernames are added by this flow. Account labels are local labels.
-- The popup must stay open. Shared multi-tab requests require the exclusive Web Lock and fresh state checks; an independent browser/device can race the same singleton and must reconcile conflicts. Missing local receipts do not prove another device is idle.
+- Metadata/account discovery is scoped to the wallet origin and browser storage partition; cross-site embedding can produce separate partitions even in the same browser. Passkey synchronization does not synchronize browser metadata or receipts. Import the public recovery descriptor on another device with access to its passkey. No hosted credential directory or globally enforced usernames are added by this flow. Account labels are local labels.
+- The signer iframe must remain mounted, even while its modal is hidden. Navigation/reload or disposal removes that runtime; reconnect and reconcile saved receipts. Shared multi-tab requests require the exclusive Web Lock and fresh state checks; an independent browser/device can race the same singleton and must reconcile conflicts. Missing local receipts do not prove another device is idle.
 - Initial setup needs owner funding plus occupied state capacity and an ordinary owner proof cell. Session budget counts positive net CKB loss, not a universal NFT/token quantity limit.
 - Recovery returns ordinary CKB and the authority cell. Other typed/data-bearing assets need compatible builders and continue to obey their app scripts. Lost passkeys need an authenticator backup/recovery mechanism; there is no social recovery or replacement-owner ceremony in this preview.
 - The contracts, SDK tests and browser tests do not constitute an independent audit or live mainnet readiness.
 
 ## Verification record
 
-- Contract build and VM tests: 56 passed, including 15 new passkey/session tests.
-- SDK/server: typecheck/build passed; 99 passed, 5 PostgreSQL integration tests skipped without `PILOT_TEST_DATABASE_URL`.
-- Docs: 14 passed and production build passed.
-- Existing demo browser suite: 14 passed. New isolated wallet browser suite: 3 passed with Chromium virtual authenticators and real distinct localhost origins.
+- Contract build and VM tests: 58 passed, including valid embedded context and missing/insecure/contradictory/tampered top-origin cases.
+- SDK/server: typecheck/build passed; 100 passed, 5 PostgreSQL integration tests skipped without `PILOT_TEST_DATABASE_URL`.
+- Docs: 15 passed and production build passed.
+- Existing demo browser suite: 14 passed. New isolated wallet browser suite: 6 passed, covering real passkey creation/sign-in, source isolation, modal lifecycle, settlement failure, cross-site embedding and denied storage with Chromium virtual authenticators; these are not public-chain browser tests.
 - Production builds for wallet, demo, React package and docs are checked separately. Vite's existing bundle-size/dependency warnings do not indicate deployment.
-- Both new contract code cells are committed on public testnet and their live hashes were verified on 2026-10-23. This verifies deployment, not the browser end-to-end flow. Live hardware-passkey/public-testnet testing remains an activation step; no local CKB node was started.
+- The revised embedded owner and unchanged session code cells were verified live against their SDK pins on 2026-10-23. The original owner code cell was consumed to reclaim capacity. This is not a browser end-to-end chain proof. Live hardware-passkey/public-testnet testing remains an activation step; no local CKB node was started.
+
+## Embedded UI trust boundary
+
+The app can position, hide or overlay its embedded frame. Origin-bound messages, WebAuthn parent checks and wallet-side policy validation do not make a malicious embedding page a trusted transaction display. Review the actual requesting app origin and permissions. The wallet signer origin remains trusted and session keys remain software-accessible there. This preview does not claim protection against all clickjacking, malicious-app presentation, every browser’s third-party storage rules or credential loss. A broader supported-device matrix and authenticated discovery/receipt backup remain V2 work.

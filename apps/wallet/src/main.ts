@@ -28,11 +28,16 @@ import {
   type PilotWalletJournal,
   type PilotWalletState,
 } from "../../../src/wallet/session";
+import {
+  PILOT_PASSKEY_CODE_HASH,
+  PILOT_LEGACY_PASSKEY_CODE_HASH,
+} from "../../../src/wallet/code";
 import { PilotPaymasterClient } from "../../../src/paymaster";
 import type { Deployment } from "../../../src/ckb/counter";
 import deployment from "../../../deployments/pilot-sponsored.json";
 const config = deployment as unknown as {
   passkey?: Deployment | null;
+  passkeyLegacy?: Deployment | null;
   walletSession?: Deployment | null;
   poolLock: ccc.ScriptLike;
 };
@@ -79,7 +84,11 @@ node("span", "You stay in control", trust);
 const preview = node("details");
 preview.className = "preview-note";
 node("summary", "Testnet preview · Know your wallet", preview);
-node("p", "Your owner private key stays in your passkey authenticator. Session keys are stored on this wallet origin and remain accessible to its own scripts. Keep this origin trusted. Only one on-chain session is active per account.", preview);
+node(
+  "p",
+  "Your owner private key stays in your passkey authenticator. Session keys are stored on this wallet origin and remain accessible to its own scripts. Keep this origin trusted. Only one on-chain session is active per account.",
+  preview,
+);
 const error = node("p");
 error.id = "error";
 error.setAttribute("role", "alert");
@@ -95,27 +104,84 @@ try {
 } catch {
   error.textContent = "Invalid requesting app origin";
 }
-const opener = window.opener as Window | null;
-if (window.self !== window.top)
-  throw new Error("Open Pilot as a top-level wallet popup");
+const embedded = window.self !== window.top;
+if (embedded && window.parent !== window.top)
+  throw new Error("Nested wallet embedding is unsupported");
+if (embedded && (params.get("embed") !== "1" || !appOrigin || !channel))
+  throw new Error("Open this wallet through the Pilot SDK modal");
+const peer = embedded ? window.parent : null;
+if (embedded) {
+  document.documentElement.classList.add("embedded");
+  heading.textContent = "Your Pilot wallet";
+  intro.querySelector("p")!.textContent = "Choose an account, then review what this app can do.";
+  node(
+    "p",
+    "Your browser may keep account history separate for each app. Use Backup & restore with your original passkey to restore an account.",
+    preview,
+  ).className = "storage-note";
+}
+const assertOwner = (passkey: PilotPasskey, challenge: ccc.Hex) =>
+  requestPilotAssertion(passkey, challenge, embedded ? appOrigin : undefined);
+async function confirmReview(message: string): Promise<boolean> {
+  const dialog = node("dialog");
+  dialog.className = "owner-review";
+  const title = node("h2", "Review and confirm", dialog);
+  title.id = "owner-review-title";
+  dialog.setAttribute("aria-labelledby", title.id);
+  node("pre", message, dialog);
+  return new Promise((resolve) => {
+    const finish = (approved: boolean) => {
+      dialog.close();
+      dialog.remove();
+      resolve(approved);
+    };
+    const cancel = node("button", "Cancel", dialog);
+    cancel.onclick = () => finish(false);
+    const approve = node("button", "Confirm with passkey", dialog);
+    approve.className = "primary";
+    approve.onclick = () => finish(true);
+    dialog.oncancel = (event) => {
+      event.preventDefault();
+      finish(false);
+    };
+    dialog.showModal();
+  });
+}
 if (appOrigin) {
   const requesting = node("div");
   requesting.className = "requesting-origin";
   node("small", "REQUESTING APP", requesting);
   node("p", appOrigin, requesting).className = "origin";
 }
-const ready = !!config.passkey && !!config.walletSession && !!paymasterUrl;
+let storageReady = true;
+try {
+  const probe = "pilot:wallet:storage-probe:" + crypto.randomUUID();
+  localStorage.setItem(probe, "1");
+  localStorage.removeItem(probe);
+} catch {
+  storageReady = false;
+}
+const ready =
+  storageReady &&
+  config.passkey?.codeHash === PILOT_PASSKEY_CODE_HASH &&
+  !!config.walletSession &&
+  !!paymasterUrl;
 if (!ready)
   node(
     "p",
-    (config.passkey && config.walletSession
-      ? "Fee sponsorship is not configured for this wallet. "
-      : "On-chain sessions are unavailable until the wallet contracts and sponsorship are configured. ") +
-      "You can create and authenticate a passkey now; no on-chain success is simulated.",
+    (!storageReady
+      ? "Your browser blocks storage for the embedded Pilot wallet. Allow storage for this wallet origin or use a supported browser. "
+      : config.passkey?.codeHash === PILOT_PASSKEY_CODE_HASH &&
+          config.walletSession
+        ? "Fee sponsorship is not configured for this wallet. "
+        : "On-chain sessions are unavailable until the wallet contracts and sponsorship are configured. ") +
+      (storageReady
+        ? "You can create and authenticate a passkey now; no on-chain success is simulated."
+        : "No wallet actions are available until storage is enabled."),
   ).className = "availability-note";
 const metaKey = "pilot:wallet:passkeys:v1";
 let passkeys: PilotPasskey[] = JSON.parse(
-  localStorage.getItem(metaKey) ?? "[]",
+  storageReady ? (localStorage.getItem(metaKey) ?? "[]") : "[]",
 ).map(parsePilotPasskey);
 let selected: PilotPasskey | undefined;
 let authenticated = false;
@@ -132,7 +198,11 @@ accounts.className = "account-card";
 accounts.id = "accounts";
 node("span", "01 / YOUR IDENTITY", accounts).className = "eyebrow";
 node("h2", "Pilot accounts", accounts);
-node("p", "Create a wallet or return with your passkey. No seed phrase to copy.", accounts).className = "section-description";
+node(
+  "p",
+  "Create a wallet or return with your passkey. No seed phrase to copy.",
+  accounts,
+).className = "section-description";
 const select = node("select", undefined, accounts);
 select.setAttribute("aria-label", "Pilot account");
 function renderAccounts() {
@@ -152,7 +222,11 @@ select.onchange = () => {
 const addresses = node("div", undefined, accounts);
 addresses.className = "addresses";
 node("small", "OWNER FUNDING ADDRESS", addresses);
-const ownerAddress = node("code", "Select or create an account to see your funding address.", addresses);
+const ownerAddress = node(
+  "code",
+  "Select or create an account to see your funding address.",
+  addresses,
+);
 ownerAddress.id = "owner-address";
 const accountAddress = node("code", "", addresses);
 const balances = node(
@@ -199,6 +273,10 @@ async function run(fn: () => Promise<void>) {
   >("button,input,select"))
     b.disabled = true;
   try {
+    if (!storageReady)
+      throw new Error(
+        "Embedded wallet storage is blocked by your browser. Enable storage for the Pilot wallet before creating an account.",
+      );
     await fn();
   } catch (e) {
     error.textContent = e instanceof Error ? e.message : String(e);
@@ -228,7 +306,7 @@ const createPasskey = button("Create Pilot passkey", async () => {
 createPasskey.className = "primary";
 button("Sign in with passkey", async () => {
   if (!selected) throw new Error("Select an account first");
-  await requestPilotAssertion(
+  await assertOwner(
     selected,
     ccc.hexFrom(crypto.getRandomValues(new Uint8Array(32))),
   );
@@ -249,30 +327,38 @@ button("Refresh balances", async () => {
 const backup = node("details", undefined, accounts);
 backup.className = "backup-tools";
 node("summary", "Backup & restore", backup);
-node("p", "Export public account details for recovery on another browser. This file contains no private keys; keep access to your original passkey.", backup);
-button("Export public recovery data", async () => {
-  if (!selected) throw new Error("Select an account");
-  const publicAccount = localStorage.getItem(accountKey(selected));
-  const blob = new Blob(
-    [
-      JSON.stringify(
-        {
-          passkey: selected,
-          account: publicAccount ? JSON.parse(publicAccount) : undefined,
-        },
-        null,
-        2,
-      ),
-    ],
-    { type: "application/json" },
-  );
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "pilot-wallet-public-recovery.json";
-  a.click();
-  URL.revokeObjectURL(url);
-}, backup);
+node(
+  "p",
+  "Export public account details for recovery on another browser. This file contains no private keys; keep access to your original passkey.",
+  backup,
+);
+button(
+  "Export public recovery data",
+  async () => {
+    if (!selected) throw new Error("Select an account");
+    const publicAccount = localStorage.getItem(accountKey(selected));
+    const blob = new Blob(
+      [
+        JSON.stringify(
+          {
+            passkey: selected,
+            account: publicAccount ? JSON.parse(publicAccount) : undefined,
+          },
+          null,
+          2,
+        ),
+      ],
+      { type: "application/json" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "pilot-wallet-public-recovery.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  backup,
+);
 const restoreLabel = node("label", "Import public recovery data", backup);
 const restore = node("input", undefined, restoreLabel);
 restore.type = "file";
@@ -319,7 +405,11 @@ const appName = node("p", "No app is requesting a connection.", review);
 appName.className = "app-request";
 const policyList = node("div", undefined, review);
 policyList.className = "policy-list";
-const emptyPolicies = node("p", "Open Pilot from an app to review the actions it wants to perform. Nothing is approved by default.", policyList);
+const emptyPolicies = node(
+  "p",
+  "Open Pilot from an app to review the actions it wants to perform. Nothing is approved by default.",
+  policyList,
+);
 emptyPolicies.className = "empty-state";
 const budgetLabel = node("label", "Maximum session spending (CKB)", review);
 const budget = node("input", undefined, budgetLabel);
@@ -343,6 +433,10 @@ const grant = button(
       );
     if (!pendingConnect || !selected || !authenticated)
       throw new Error("Sign in, then review an app connection");
+    if (selected.codeHash === PILOT_LEGACY_PASSKEY_CODE_HASH)
+      throw new Error(
+        "This is an original top-level-only account. Recover it from the trusted wallet directly, then create a new embedded account. Do not send funds to a replacement address until reviewed.",
+      );
     const ownerSelection = selected,
       approval = pendingConnect;
     await navigator.locks.request(
@@ -361,7 +455,7 @@ const grant = button(
           client,
           ownerSelection,
           config.passkey!,
-          undefined,
+          (challenge) => assertOwner(ownerSelection, challenge),
           config.poolLock,
         );
         await owner.connect();
@@ -435,9 +529,9 @@ const grant = button(
           ? "Existing account capacity is reused; this replaces its active session."
           : `Initial account funding: ${ccc.fixedPointToString(capacity)} CKB (budget plus occupied capacity).`;
         if (
-          !window.confirm(
+          !(await confirmReview(
             `${appOrigin}\nDestination: ${await session.getRecommendedAddress()}\n${total}\nMaximum session spending: ${budget.value} CKB.\nApprove ${approved.length} selected policies?`,
-          )
+          ))
         )
           throw new Error("Session approval cancelled");
         await session.grant(state, capacity);
@@ -456,7 +550,7 @@ const grant = button(
         pendingConnect = undefined;
         showOwner();
         status.textContent =
-          "Session confirmed on-chain. Keep this wallet window open for automatic actions.";
+          "Session confirmed on-chain. You can close the modal. Pilot stays connected for approved actions.";
         await renderLogs();
       },
     );
@@ -469,7 +563,11 @@ const management = node("section");
 management.className = "management-card";
 node("span", "03 / ALWAYS YOURS", management).className = "eyebrow";
 node("h2", "Session and recovery", management);
-node("p", "Settle your queue, withdraw access or bring your CKB home. On-chain changes require your passkey.", management).className = "section-description";
+node(
+  "p",
+  "Settle your queue, withdraw access or bring your CKB home. On-chain changes require your passkey.",
+  management,
+).className = "section-description";
 button(
   "Reconcile queued transactions",
   async () => {
@@ -497,9 +595,9 @@ button(
   "Recover ordinary CKB with passkey",
   async () => {
     if (
-      !window.confirm(
+      !(await confirmReview(
         "Stop automatic access, settle saved transactions, then recover ordinary CKB and close the account authority? Stop other devices first; missing local receipts do not prove they are idle. Typed app assets require separate builders.",
-      )
+      ))
     )
       return;
     const e = await recoveryEngine();
@@ -522,9 +620,9 @@ button(
           "Recover the old account and its remaining assets before replacing its descriptor",
         );
     if (
-      !window.confirm(
+      !(await confirmReview(
         "The old account has no live cells. Preserve its public descriptor and prepare a new account address on next approval? Existing app state does not migrate automatically.",
-      )
+      ))
     )
       return;
     localStorage.setItem(
@@ -591,7 +689,11 @@ function engine(
   });
 }
 async function recoveryEngine() {
-  if (!ready || !selected || !authenticated)
+  const ownerDeployment =
+    selected?.codeHash === PILOT_LEGACY_PASSKEY_CODE_HASH
+      ? config.passkeyLegacy
+      : config.passkey;
+  if (!ownerDeployment || !paymasterUrl || !selected || !authenticated)
     throw new Error(
       "Sign in with the original passkey and configure deployment/sponsorship",
     );
@@ -602,8 +704,8 @@ async function recoveryEngine() {
   const owner = new PilotPasskeySigner(
     client,
     selected,
-    config.passkey!,
-    undefined,
+    ownerDeployment,
+    (challenge) => assertOwner(selected!, challenge),
     config.poolLock,
   );
   const key = ccc.hexFrom(secp256k1.utils.randomSecretKey());
@@ -621,7 +723,7 @@ function reply(
   result?: unknown,
   failure?: string,
 ) {
-  opener?.postMessage(
+  peer?.postMessage(
     {
       protocol: PILOT_WALLET_PROTOCOL,
       channel,
@@ -635,8 +737,8 @@ function reply(
 let operation = false;
 window.addEventListener("message", (event) => {
   if (
-    !opener ||
-    event.source !== opener ||
+    !peer ||
+    event.source !== peer ||
     event.origin !== appOrigin ||
     !isPilotWalletEnvelope(event.data, channel)
   )
@@ -756,8 +858,8 @@ window.addEventListener("message", (event) => {
       void renderLogs();
     });
 });
-if (opener && appOrigin && channel)
-  opener.postMessage(
+if (peer && appOrigin && channel)
+  peer.postMessage(
     { protocol: PILOT_WALLET_PROTOCOL, channel, id: "ready", method: "ready" },
     appOrigin,
   );

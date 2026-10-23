@@ -23,6 +23,33 @@ struct ClientData {
     origin: String,
     #[serde(rename = "crossOrigin", default)]
     cross_origin: bool,
+    #[serde(rename = "topOrigin", default)]
+    top_origin: Option<String>,
+}
+// Accept only serialized secure origins (plus local development origins).
+fn valid_top_origin(value: &str) -> bool {
+    let authority = if let Some(rest) = value.strip_prefix("https://") {
+        rest
+    } else if let Some(rest) = value.strip_prefix("http://") {
+        if rest != "localhost"
+            && rest != "127.0.0.1"
+            && !rest.strip_prefix("localhost:").map_or(false, |p| {
+                !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())
+            })
+            && !rest.strip_prefix("127.0.0.1:").map_or(false, |p| {
+                !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())
+            })
+        {
+            return false;
+        }
+        rest
+    } else {
+        return false;
+    };
+    !authority.is_empty()
+        && authority
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".-:[]".contains(&b))
 }
 fn validate() -> Result<(), i8> {
     // args: compressed P-256 public key, SHA256(rpId), SHA256(exact origin).
@@ -51,7 +78,11 @@ fn validate() -> Result<(), i8> {
     }
     let data: ClientData = serde_json::from_slice(json).map_err(|_| 6)?;
     if data.kind != "webauthn.get"
-        || data.cross_origin
+        || if data.cross_origin {
+            !data.top_origin.as_deref().map_or(false, valid_top_origin)
+        } else {
+            data.top_origin.is_some()
+        }
         || Sha256::digest(data.origin.as_bytes())[..] != args[65..97]
     {
         return Err(6);

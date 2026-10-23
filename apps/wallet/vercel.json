@@ -3,10 +3,27 @@
   "buildCommand": "npm run build --prefix ../.. && npm run build",
   "installCommand": "npm ci --prefix ../.. && npm ci",
   "outputDirectory": "dist",
-  "headers": [{"source":"/(.*)","headers":[
-    {"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https:; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"},
-    {"key":"X-Frame-Options","value":"DENY"},
-    {"key":"Referrer-Policy","value":"no-referrer"},
-    {"key":"X-Content-Type-Options","value":"nosniff"}
-  ]}]
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https:; img-src 'self' data:; frame-ancestors https: http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "publickey-credentials-create=(self), publickey-credentials-get=(self)"
+        }
+      ]
+    }
+  ]
 }

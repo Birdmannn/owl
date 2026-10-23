@@ -1,5 +1,5 @@
 import { PILOT_ACCOUNT_CODE_HASH } from '../src/ckb/account-code.js';
-import { PILOT_PASSKEY_CODE_HASH, PILOT_WALLET_SESSION_CODE_HASH } from '../src/wallet/code.js';
+import { PILOT_LEGACY_PASSKEY_CODE_HASH, PILOT_PASSKEY_CODE_HASH, PILOT_WALLET_SESSION_CODE_HASH } from '../src/wallet/code.js';
 import { databaseUrl } from './postgres.js';
 import { resolve } from 'node:path';
 import { ccc } from '@ckb-ccc/core';
@@ -27,7 +27,7 @@ export async function paymasterFromEnvironment() {
       maxFee: BigInt(process.env.PILOT_PAYMASTER_MAX_FEE ?? '100000'), feeRate: BigInt(process.env.PILOT_PAYMASTER_FEE_RATE ?? '1000'),
       dailyBudget: BigInt(process.env.PILOT_PAYMASTER_DAILY_BUDGET ?? '100000000'), ownerDailyBudget: BigInt(process.env.PILOT_PAYMASTER_OWNER_DAILY_BUDGET ?? '1000000'),
       allowOwnerTransactions: process.env.PILOT_PAYMASTER_ALLOW_OWNER_TRANSACTIONS !== 'false',
-      allowedCodeHashes: (process.env.PILOT_PAYMASTER_ALLOWED_CODE_HASHES?.split(',').map(h => ccc.hexFrom(h.trim())) ?? [SPONSORED_COUNTER_CODE_HASH, SPONSORED_DELEGATION_CODE_HASH, COUNTER_V1_CODE_HASH, DELEGATION_V1_CODE_HASH, PILOT_ACCOUNT_CODE_HASH, PILOT_PASSKEY_CODE_HASH, PILOT_WALLET_SESSION_CODE_HASH]),
+      allowedCodeHashes: (process.env.PILOT_PAYMASTER_ALLOWED_CODE_HASHES?.split(',').map(h => ccc.hexFrom(h.trim())) ?? [SPONSORED_COUNTER_CODE_HASH, SPONSORED_DELEGATION_CODE_HASH, COUNTER_V1_CODE_HASH, DELEGATION_V1_CODE_HASH, PILOT_ACCOUNT_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH, PILOT_PASSKEY_CODE_HASH, PILOT_WALLET_SESSION_CODE_HASH]),
     });
     return paymaster;
   } catch (error) {

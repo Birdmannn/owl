@@ -44,7 +44,9 @@ export function isPilotWalletEnvelope(
 }
 /** Public transport: only public descriptors, effects and receipts cross this boundary. */
 export class PilotWalletProvider {
-  private popup: Window | null = null;
+  private frame?: HTMLIFrameElement;
+  private host?: HTMLDivElement;
+  private dialog?: HTMLDialogElement;
   private channel = "";
   private pending = new Map<
     string,
@@ -55,19 +57,25 @@ export class PilotWalletProvider {
     }
   >();
   private ready?: () => void;
+  private cancelReady?: () => void;
   private connection?: PilotWalletConnection;
   readonly origin: string;
   private disposed = false;
-  constructor(readonly options: { url: string; timeoutMs?: number }) {
+  constructor(
+    readonly options: { url: string; timeoutMs?: number; styleNonce?: string },
+  ) {
     const url = new URL(options.url);
     this.origin = canonicalWalletOrigin(url.origin);
     if (url.username || url.password || url.hash)
       throw new Error("Invalid wallet URL");
+    // Require a direct top-level app. Nested ancestors complicate WebAuthn topOrigin binding.
+    if (window.self !== window.top)
+      throw new Error("Open the integrating app as a top-level page");
     window.addEventListener("message", this.receive);
   }
   private receive = (event: MessageEvent) => {
     if (
-      event.source !== this.popup ||
+      event.source !== this.frame?.contentWindow ||
       event.origin !== this.origin ||
       !isPilotWalletEnvelope(event.data, this.channel)
     )
@@ -84,6 +92,56 @@ export class PilotWalletProvider {
     if (v.error) p.reject(new Error(v.error));
     else p.resolve(v.result);
   };
+  private mount(url: URL) {
+    this.host = document.createElement("div");
+    this.host.setAttribute("data-pilot-wallet", "");
+    const shadow = this.host.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    if (this.options.styleNonce) style.nonce = this.options.styleNonce;
+    style.textContent = `
+      :host{color-scheme:dark}
+      dialog{box-sizing:border-box;width:min(500px,calc(100vw - 24px));height:min(850px,calc(100dvh - 24px));max-width:none;max-height:none;padding:0;border:1px solid #496040;border-radius:16px;background:#10241c;color:#ecf0e5;overflow:hidden;box-shadow:0 24px 100px #0008}
+      dialog::backdrop{background:#040d09b8;backdrop-filter:blur(5px)}
+      header{height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #354c3b;font:12px system-ui,sans-serif}
+      span{color:#b5c5ac;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 12px}
+      button{border:1px solid #53694d;background:#192e23;color:#ecf0e5;border-radius:6px;font:12px system-ui,sans-serif;padding:5px 10px;cursor:pointer}
+      button:focus-visible{outline:2px solid #c7f881;outline-offset:3px}
+      iframe{display:block;border:0;width:100%;height:calc(100% - 48px);background:#10241c}
+      @media(prefers-reduced-motion:reduce){dialog::backdrop{backdrop-filter:none}}
+    `;
+    this.dialog = document.createElement("dialog");
+    this.dialog.setAttribute("aria-label", "Pilot wallet");
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = "Pilot";
+    const origin = document.createElement("span");
+    origin.textContent = this.origin;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.setAttribute("aria-label", "Close Pilot wallet");
+    close.onclick = () => this.hide();
+    header.append(title, origin, close);
+    this.frame = document.createElement("iframe");
+    this.frame.title = "Pilot wallet account and permissions";
+    this.frame.allow = `publickey-credentials-create ${this.origin}; publickey-credentials-get ${this.origin}`;
+    this.frame.referrerPolicy = "origin";
+    this.frame.src = url.toString();
+    this.dialog.append(header, this.frame);
+    shadow.append(style, this.dialog);
+    document.body.append(this.host);
+    this.open();
+  }
+  /** Reopen the connected wallet for accounts, permissions, balances, logs and recovery. */
+  open() {
+    if (this.disposed || !this.dialog || !this.host?.isConnected)
+      throw new Error("Connect Pilot before opening the wallet");
+    if (!this.dialog.open) this.dialog.showModal();
+  }
+  /** Hide the presentation only. Keep the isolated signer alive; this does not disconnect. */
+  hide() {
+    this.dialog?.close();
+  }
   async connect(request: PilotWalletConnect): Promise<PilotWalletConnection> {
     if (this.disposed) throw new Error("Provider disposed");
     validatePilotPolicies(request.policies);
@@ -93,34 +151,38 @@ export class PilotWalletProvider {
       BigInt(request.budget) <= 0n
     )
       throw new Error("Choose an app name and positive spending budget");
-    if (this.popup && !this.popup.closed)
+    if (this.frame) {
+      this.open();
       throw new Error(
-        "Disconnect the existing wallet connection before reconnecting",
+        "Pilot is already open; finish or disconnect the existing connection before reconnecting",
       );
+    }
     this.channel = crypto.randomUUID();
     const url = new URL(this.options.url);
     url.searchParams.set("appOrigin", location.origin);
     url.searchParams.set("channel", this.channel);
+    url.searchParams.set("embed", "1");
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.ready = undefined;
-        reject(new Error("Pilot wallet did not open"));
+        reject(
+          new Error(
+            "Pilot wallet could not load. Check wallet URL, frame-src and framing permissions.",
+          ),
+        );
       }, this.options.timeoutMs ?? 300_000);
+      this.cancelReady = () => {
+        clearTimeout(timer);
+        reject(new Error("Provider disposed"));
+      };
       this.ready = () => {
         clearTimeout(timer);
         this.ready = undefined;
+        this.cancelReady = undefined;
         resolve();
       };
     });
-    this.popup = window.open(
-      url.toString(),
-      "pilot-wallet-" + this.channel,
-      "popup,width=480,height=780",
-    );
-    if (!this.popup) {
-      this.ready?.();
-      throw new Error("Allow the Pilot wallet popup");
-    }
+    this.mount(url);
     await ready;
     const connection = (await this.request(
       "connect",
@@ -132,6 +194,7 @@ export class PilotWalletProvider {
     )
       throw new Error("Wallet returned an invalid session");
     this.connection = connection;
+    this.hide();
     return connection;
   }
   async request(
@@ -145,20 +208,20 @@ export class PilotWalletProvider {
       | "signMessage",
     params?: unknown,
   ): Promise<unknown> {
-    if (this.disposed || !this.popup || this.popup.closed)
-      throw new Error("Open the Pilot wallet first");
+    if (this.disposed || !this.frame?.contentWindow || !this.host?.isConnected)
+      throw new Error("Connect Pilot first");
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(
           new Error(
-            "Wallet response unavailable; retry the same request ID and reconcile before new spending",
+            "Wallet response unavailable; retry the same action request ID and reconcile before new spending",
           ),
         );
       }, this.options.timeoutMs ?? 300_000);
       this.pending.set(id, { resolve, reject, timer });
-      this.popup!.postMessage(
+      this.frame!.contentWindow!.postMessage(
         {
           protocol: PILOT_WALLET_PROTOCOL,
           channel: this.channel,
@@ -171,17 +234,29 @@ export class PilotWalletProvider {
     });
   }
   async disconnect() {
-    if (this.popup && !this.popup.closed) await this.request("disconnect");
-    this.popup?.close();
-    this.popup = null;
+    // Do not remove the signer or clear the account if settlement fails.
+    if (this.connection) await this.request("disconnect");
+    else if (this.pending.size || this.ready) {
+      this.open();
+      throw new Error(
+        "Finish the pending wallet operation before disconnecting",
+      );
+    }
+    this.unmount();
+  }
+  private unmount() {
+    this.hide();
+    this.host?.remove();
+    this.host = undefined;
+    this.dialog = undefined;
+    this.frame = undefined;
     this.connection = undefined;
   }
   get connected() {
     return (
       !!this.connection &&
       this.connection.expiresAt > Date.now() &&
-      !!this.popup &&
-      !this.popup.closed
+      !!this.host?.isConnected
     );
   }
   get account() {
@@ -190,13 +265,16 @@ export class PilotWalletProvider {
   dispose() {
     this.disposed = true;
     window.removeEventListener("message", this.receive);
+    this.cancelReady?.();
+    this.cancelReady = undefined;
+    this.ready = undefined;
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error("Provider disposed"));
     }
     this.pending.clear();
-    this.popup?.close();
-    this.connection = undefined;
+    // Local teardown only. Saved signed transactions still require reconciliation.
+    this.unmount();
   }
 }
 /** CCC-compatible app-side signer. The app never receives private keys. */

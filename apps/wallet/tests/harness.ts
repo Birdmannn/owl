@@ -1,7 +1,7 @@
 import { PilotWalletProvider } from "../../../src/wallet/provider";
 import { ccc } from "@ckb-ccc/core";
 const provider = new PilotWalletProvider({
-  url: "http://localhost:5176",
+  url: new URLSearchParams(location.search).get("wallet") ?? "http://localhost:5176",
   timeoutMs: 300_000,
 });
 Object.assign(window, { pilotTestProvider: provider });

@@ -69,13 +69,13 @@ export function HostedWallet() {
       <h2>Connect directly to Pilot.</h2>
       <p>
         Create a Pilot passkey without JoyID or another wallet. Approve the app
-        in a separate wallet window; owner and session private keys stay outside
+        in the embedded Pilot modal; owner and session private keys stay outside
         this app.
       </p>
       <p>
-        The two new wallet contracts must be deployed before session funding
-        works. This preview does not replace the existing flight demo’s wallet
-        flow.
+        The embedded owner-lock deployment and sponsorship must be configured
+        before session funding works. This preview does not replace the existing
+        flight demo’s wallet flow.
       </p>
       {!url && (
         <p role="status">
@@ -89,6 +89,11 @@ export function HostedWallet() {
       >
         Connect Pilot passkey wallet
       </button>
+      {(connection || busy) && provider.current && (
+        <button className="secondary" onClick={() => provider.current?.open()}>
+          Open Pilot account
+        </button>
+      )}
       {connection && (
         <>
           <p>
@@ -163,9 +168,7 @@ export function HostedWallet() {
           </button>
         </>
       )}
-      {busy && (
-        <p role="status">Complete the request in the Pilot wallet window.</p>
-      )}
+      {busy && <p role="status">Complete the request in the Pilot modal.</p>}
       {result && <p role="status">{result}</p>}
       {error && <p role="alert">{error}</p>}
       <details>

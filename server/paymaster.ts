@@ -1,5 +1,5 @@
 import { PILOT_ACCOUNT_CODE_HASH } from '../src/ckb/account-code.js';
-import { PILOT_WALLET_SESSION_CODE_HASH, PILOT_PASSKEY_CODE_HASH } from '../src/wallet/code.js';
+import { PILOT_WALLET_SESSION_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH, PILOT_PASSKEY_CODE_HASH } from '../src/wallet/code.js';
 import { createServer, type RequestListener } from 'node:http';
 import { PostgresJournal, postgresPool } from './postgres.js';
 import { readJson, MemoryRateLimiter, requestIp, type RateLimiter } from './http.js';
@@ -124,7 +124,7 @@ export class PilotPaymaster {
         const quote: SponsorQuote = { version: 1, id: ccc.hashCkb(tx.toBytes()), transactionHash: tx.hash(), bytes: ccc.hexFrom(tx.toBytes()), baseBytes: bytes, fee: fee.toString(), expiresAt: Date.now() + 120_000 };
         const first = accounts[0]?.cellOutput.lock ?? cells[0]!.cellOutput.lock;
         const owner = !accounts.length && registrationOwners.size === 1 ? [...registrationOwners][0]!
-          : (accounts.length > 0 || (this.options.allowedCodeHashes.includes(first.codeHash) && first.codeHash !== PILOT_PASSKEY_CODE_HASH)) && ccc.bytesFrom(first.args).length >= 32
+          : (accounts.length > 0 || (this.options.allowedCodeHashes.includes(first.codeHash) && ![PILOT_PASSKEY_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH].includes(first.codeHash))) && ccc.bytesFrom(first.args).length >= 32
             ? ccc.hexFrom(ccc.bytesFrom(first.args).slice(0, 32)) : first.hash();
         data.records = data.records.filter(r => r.bytes || r.quote.expiresAt + 86_400_000 > Date.now());
         if (data.records.length > 50_000) throw new Error('Paymaster journal needs archival');
