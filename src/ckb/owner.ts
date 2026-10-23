@@ -1,5 +1,6 @@
 import { verifySponsorQuote, type SponsorQuote } from '../paymaster.js';
 import { ccc } from '@ckb-ccc/core';
+import { PILOT_PASSKEY_CODE_HASH } from '../wallet/code.js';
 
 /** Owner-input presence proves consent only for locks requiring a signature on every spend.
  * Reject unknown scripts and optional/permissionless modes before funding a delegation.
@@ -7,6 +8,8 @@ import { ccc } from '@ckb-ccc/core';
  */
 export async function assertPilotSigningOwner(client: ccc.Client, ownerLock: ccc.ScriptLike): Promise<void> {
   const lock = ccc.Script.from(ownerLock), args = ccc.bytesFrom(lock.args);
+  // This pinned lock requires a user-verified P-256 assertion on every spend.
+  if (lock.codeHash === PILOT_PASSKEY_CODE_HASH && lock.hashType === 'data2' && args.length === 97) return;
   const supported: [ccc.KnownScript, boolean][] = [
     [ccc.KnownScript.Secp256k1Blake160, args.length === 20],
     [ccc.KnownScript.OmniLock, args.length === 22 && [0, 1, 0x12, 4, 5].includes(args[0]!) && args[21] === 0],

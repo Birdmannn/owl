@@ -1,3 +1,5 @@
+import { PILOT_ACCOUNT_CODE_HASH } from '../src/ckb/account-code.js';
+import { PILOT_PASSKEY_CODE_HASH, PILOT_WALLET_SESSION_CODE_HASH } from '../src/wallet/code.js';
 import { ccc } from '@ckb-ccc/core';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -15,7 +17,7 @@ if (!secret) {
   secret = account.privateKey;
 }
 const selected = process.argv[2] ?? 'both';
-if (!['counter', 'delegation', 'both'].includes(selected)) throw new Error('Use npm run paymaster:deploy -- counter|delegation|both');
+if (!['counter', 'delegation', 'account', 'passkey', 'walletSession', 'wallet', 'both'].includes(selected)) throw new Error('Use npm run paymaster:deploy -- counter|delegation|account|passkey|walletSession|wallet|both');
 const client = new ccc.ClientPublicTestnet({ url: process.env.PILOT_PAYMASTER_RPC ?? 'https://testnet.ckb.dev' });
 const genesisHash = (await client.getHeaderByNumberNoCache(0))?.hash;
 if (genesisHash !== '0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606') throw new Error('Deployment requires CKB testnet');
@@ -28,12 +30,15 @@ try { await writeFile(journalFile, '{}', { flag: 'wx', mode: 0o600 }); } catch (
 const configFile = resolve('deployments/pilot-sponsored.json');
 const release = await lockfile.lock(configFile);
 try {
-  const config = JSON.parse(await readFile(configFile, 'utf8')) as { counter: Deployment | null; delegation: Deployment | null; poolLock?: ccc.ScriptLike; status: string };
+  const config = JSON.parse(await readFile(configFile, 'utf8')) as { counter: Deployment | null; delegation: Deployment | null; account?: Deployment | null; passkey?:Deployment|null; walletSession?:Deployment|null; poolLock?: ccc.ScriptLike; status: string };
   if (config.poolLock && !pool.eq(config.poolLock)) throw new Error('Configured sponsored pool differs from receiving address; review configuration before deployment');
   const specs = [
     { kind: 'counter' as const, file: 'pilot-sponsored-session-lock', hash: SPONSORED_COUNTER_CODE_HASH },
     { kind: 'delegation' as const, file: 'pilot-sponsored-delegation-lock', hash: SPONSORED_DELEGATION_CODE_HASH },
-  ].filter(spec => selected === 'both' || selected === spec.kind);
+    { kind: 'account' as const, file: 'pilot-account-lock', hash: PILOT_ACCOUNT_CODE_HASH },
+    { kind: 'passkey' as const, file: 'pilot-passkey-lock', hash: PILOT_PASSKEY_CODE_HASH },
+    { kind: 'walletSession' as const, file: 'pilot-wallet-session-lock', hash: PILOT_WALLET_SESSION_CODE_HASH },
+  ].filter(spec => (selected === 'both' && ['counter','delegation'].includes(spec.kind)) || (selected==='wallet' && ['passkey','walletSession'].includes(spec.kind)) || selected === spec.kind);
   const pending = [];
   for (const spec of specs) {
     if (config[spec.kind]) { await verifyDeployment(client, config[spec.kind]!); continue; }

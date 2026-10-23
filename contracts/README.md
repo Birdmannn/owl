@@ -69,3 +69,20 @@ Build produces `pilot-sponsored-session-lock` and `pilot-sponsored-delegation-lo
 Sponsored counter args are the original 81 bytes plus pool lock hash (32). Its data still decrements the virtual budget by the action cap; the cap is an allowance, not user fee capacity. Sponsored delegation args are the original rule table plus pool lock hash (32). Its digest domain is `owl-pilot-delegation-sponsored-v1`; pool witness 1 lock is normalized to empty while type witnesses stay signed. Cumulative delegation allowance is local/service enforced, not on-chain. Owner mode still requires an input under the pinned signature-required owner lock.
 
 VM regression tests cover pool-only fees, user capacity preservation, redirected pool change, excess fees, unauthorized keys/transitions, added outputs, pool data changes, and pool co-signature/type-witness binding. The public sponsored code cells are not deployed by the test suite. See [PAYMASTER.md](../PAYMASTER.md).
+
+## Persistent account lock v1
+
+`account-lock` is a separate general-purpose owner-recoverable account, not a bounded counter grant. Args are owner lock hash (32), compressed account public key (33), pinned ordinary pool lock hash (32), and maximum network fee (u64 LE). Hash type is `data2`; the SDK pins the compiled code hash in `src/ckb/account-code.ts`.
+
+Witness mode `01` plus compact account signature (64) authorizes arbitrary account input/output shapes, subject to app scripts. The pool input and change must be last, ordinary and unique; their difference must equal the complete transaction fee within the cap. This enforces zero network fee from user inputs. There is no on-chain manifest allowlist, cumulative spending cap or expiry. The account key can spend all account funds when eligible sponsorship is available.
+
+The signing digest is CKB-personalized Blake2b over `owl-pilot-account-v1`, raw transaction hash, then each length-prefixed witness. Normalize only the first account-group witness lock to `01` and the last pool witness lock to empty bytes; retain type fields and extra witnesses. Other parties must finalize their witnesses before Pilot signs. A second independent Pilot account group is not supported by the SDK.
+
+Witness mode `00` requires an input whose full lock hash matches the owner. That input's lock enforces owner consent. Owner recovery works without the Pilot key or pool, but type scripts still run. The SDK only accepts supported signature-required owner locks. Recovery must consume each cell to revoke authority over it; there is no account-wide revocation bit.
+
+The SDK can construct independent ordinary-CKB recovery from a public descriptor. Deploy separately with `npm run paymaster:deploy -- account` after funding the deployer for the actual compiled code-cell size plus fees. This command is available but has not been run for the account lock.
+# Passkey wallet contracts
+
+`pilot-passkey-lock` and `pilot-wallet-session-lock` are separate additions to the existing policies. The former verifies ES256 WebAuthn transaction assertions with exact RP/origin/challenge and mandatory presence/verification. The latter pins a built-in TYPE_ID authority and enforces immutable session policies, sequence, cumulative positive net CKB spending and zero user network fee. Its owner branch requires the pinned owner input; the owner lock validates the passkey signature. Replacing/closing the authority revokes old session access.
+
+See [PILOT_WALLET.md](../PILOT_WALLET.md) for argument/state formats, policy semantics and limitations. Names are not entrypoint parsers; token quantities need explicit compatible policies/builders. Expiry is not an on-chain upper timestamp bound. Both new deployment records are unset. `npm run paymaster:deploy -- wallet` is the explicit two-contract deployment target; `both` remains the existing sponsored pair.

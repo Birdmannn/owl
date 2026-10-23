@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod account;
+#[cfg(test)]
 mod sponsored;
 #[cfg(test)]
 mod delegation;
@@ -237,3 +239,5 @@ mod tests {
         rejects(&f, sign(tx, &key(1)), 7);
     }
 }
+#[cfg(test)]
+mod wallet;

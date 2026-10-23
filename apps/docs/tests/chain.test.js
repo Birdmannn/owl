@@ -26,7 +26,7 @@ function fixture(t, { mode = 'session', delegated = false, setup = false, recove
   t.mock.method(client, 'getHeaderByNumberNoCache', async () => ({ timestamp: 123456n }));
   return { tx, previous };
 }
-test('both policies are queried and duplicate transactions are counted once with full fees', async t => {
+test('all policies are queried and duplicate transactions are counted once with full fees', async t => {
   const { tx } = fixture(t);
   tx.inputs.push(ccc.CellInput.from({ previousOutput: { txHash: hash('ef'), index: 0 } }));
   tx.outputs.push(ccc.CellOutput.from({ capacity: 15_000_000_000n, lock: ordinary })); tx.outputsData.push('0x');
@@ -85,4 +85,25 @@ test('local history reads every stored app and owner with every log, excluding s
 });
 test('deposit rejects another chain before building or signing', async () => {
   await assert.rejects(buildDeposit({ client: { async getHeaderByNumberNoCache() { return { hash: hash('00') }; } } }, '100'), /CKB testnet/);
+});
+
+test('board recognizes general Pilot account actions at a nonzero input position', async t => {
+  const { tx, previous } = fixture(t);
+  const account = boardPolicies.find(policy => policy.id === 'account-v1');
+  const accountLock = ccc.Script.from({ codeHash: account.codeHash, hashType: 'data2', args: `0x${'33'.repeat(105)}` });
+  previous.outputs[0].lock = ccc.Script.from(ordinary);
+  previous.outputs.push(ccc.CellOutput.from({ lock: accountLock, capacity: 20_000_000_000n })); previous.outputsData.push('0x');
+  tx.inputs.push(ccc.CellInput.from({ previousOutput: { txHash: hash('cd'), index: 1 } }));
+  tx.outputs[0].lock = accountLock; tx.outputs[0].capacity = 35_000_000_000n;
+  tx.setWitnessArgs(0, {lock:'0x'}); tx.setWitnessArgs(1, {lock:`0x01${'11'.repeat(64)}`});
+  const {rows} = await loadBoardPage();
+  assert.equal(rows[0].action, 'Pilot account action'); assert.equal(rows[0].app, 'Persistent Pilot account');
+  assert.equal(rows[0].details.ownerLockHashes[0], hash('33'));
+});
+
+test('board identifies passkey owners and wallet session actions without inventing session keys from args',async t=>{
+ const {tx,previous}=fixture(t);const policy=boardPolicies.find(p=>p.id==='wallet-session-v1');const wallet=ccc.Script.from({codeHash:policy.codeHash,hashType:'data2',args:'0x'+'11'.repeat(104)});tx.outputs[0].lock=wallet;previous.outputs[0].lock=wallet;
+ const {rows}=await loadBoardPage();assert.equal(rows[0].action,'Wallet session action');assert.equal(rows[0].signer,'Pilot session key');assert.equal(rows[0].session,'');assert.deepEqual(rows[0].details.ownerLockHashes,[hash('11')]);
+ const ownerPolicy=boardPolicies.find(p=>p.id==='passkey-v1');const owner=ccc.Script.from({codeHash:ownerPolicy.codeHash,hashType:'data2',args:'0x'+'22'.repeat(97)});tx.outputs[0].lock=owner;previous.outputs[0].lock=owner;tx.setWitnessArgs(0,{lock:'0x00'+'33'.repeat(300)});
+ const next=await loadBoardPage();assert.equal(next.rows[0].action,'Passkey owner transaction');assert.equal(next.rows[0].signer,'Pilot passkey');assert.deepEqual(next.rows[0].details.ownerLockHashes,[owner.hash()]);assert.equal(next.rows[0].session,'');
 });

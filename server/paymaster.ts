@@ -1,3 +1,5 @@
+import { PILOT_ACCOUNT_CODE_HASH } from '../src/ckb/account-code.js';
+import { PILOT_WALLET_SESSION_CODE_HASH, PILOT_PASSKEY_CODE_HASH } from '../src/wallet/code.js';
 import { createServer, type RequestListener } from 'node:http';
 import { PostgresJournal, postgresPool } from './postgres.js';
 import { readJson, MemoryRateLimiter, requestIp, type RateLimiter } from './http.js';
@@ -9,7 +11,7 @@ import { ccc } from '@ckb-ccc/core';
 import { inputCapacity, type SponsorQuote } from '../src/paymaster.js';
 import { assertPilotSigningOwner, verifyOwnerSignatureChanges } from '../src/ckb/owner.js';
 class Requote extends Error { constructor(readonly quoteId: ccc.Hex) { super('Requote unsigned request'); } }
-interface Record { quote: SponsorQuote; bytes?: ccc.Hex; day: string; owner: string }
+interface Record { quote: SponsorQuote; bytes?: ccc.Hex; day: string; owner: string; accounts?: string[] }
 export interface PaymasterData { version: 1; records: Record[] }
 export interface PaymasterStorage {
   init(): Promise<void>;
@@ -61,12 +63,46 @@ export class PilotPaymaster {
     if (await inputCapacity(this.client, base) !== base.outputs.reduce((n, o) => n + o.capacity, 0n)) throw new Error('User must fund cell capacity and assets, but zero network fee');
     const cells = await Promise.all(base.inputs.map(input => this.client.getCellLive(input.previousOutput, true)));
     if (cells.some(c => !c || c.cellOutput.lock.eq(this.pool))) throw new Error('Invalid user funding input');
+    const accounts = cells.filter(c => [PILOT_ACCOUNT_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH].includes(c!.cellOutput.lock.codeHash));
+    if (accounts.length) {
+      const lock = accounts[0]!.cellOutput.lock, args = ccc.bytesFrom(lock.args);
+      const modern=lock.codeHash===PILOT_WALLET_SESSION_CODE_HASH;
+      if (lock.hashType !== 'data2' || args.length !== (modern?104:105) || ccc.hexFrom(args.slice(modern?64:65, modern?96:97)) !== this.pool.hash()
+        || accounts.some(c => !c!.cellOutput.lock.eq(lock)) || base.outputs.some(o => o.lock.eq(this.pool))) throw new Error('Invalid Pilot account sponsorship');
+    }
+    // Register only accounts funded by a complete, signature-required owner input.
+    // The registration becomes usable only after submit validates all scripts AND the funding commits.
+    const registrations: string[] = []; const registrationOwners = new Set<string>();
+    for (const output of base.outputs) {
+      if (![PILOT_ACCOUNT_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH].includes(output.lock.codeHash) || output.lock.hashType !== 'data2') continue;
+      const args = ccc.bytesFrom(output.lock.args);
+      const modern=output.lock.codeHash===PILOT_WALLET_SESSION_CODE_HASH;
+      if (args.length !== (modern?104:105) || ccc.hexFrom(args.slice(modern?64:65,modern?96:97)) !== this.pool.hash()) continue;
+      const proof = cells.find(cell => cell!.cellOutput.lock.hash() === ccc.hexFrom(args.slice(0,32)));
+      if (proof) { await assertPilotSigningOwner(this.client, proof.cellOutput.lock); registrations.push(output.lock.hash()); registrationOwners.add(proof.cellOutput.lock.hash()); }
+    }
+    if (!accounts.length && registrationOwners.size > 1) throw new Error('Fund one Pilot recovery owner per transaction');
+    let ownerRecovery = false;
+    if (accounts.length) {
+      const account = accounts[0]!, index = cells.indexOf(account), ownerHash = ccc.hexFrom(ccc.bytesFrom(account.cellOutput.lock.args).slice(0,32));
+      const proof = cells.find(cell => cell!.cellOutput.lock.hash() === ownerHash);
+      if (proof && base.getWitnessArgs(index)?.lock === '0x00') { await assertPilotSigningOwner(this.client, proof.cellOutput.lock); ownerRecovery = true; }
+    }
     const related = [...cells.map(c => c!.cellOutput), ...base.outputs];
     if (!related.some(o => [o.lock.codeHash, o.type?.codeHash].some(hash => hash && this.options.allowedCodeHashes.includes(hash)))) {
       if (!this.options.allowOwnerTransactions || !cells.every(c => c!.cellOutput.lock.eq(cells[0]!.cellOutput.lock))) throw new Error('Application is not eligible for this pool');
       await assertPilotSigningOwner(this.client, cells[0]!.cellOutput.lock);
     }
     return this.options.store.exclusive(async data => {
+      if (accounts.length && !ownerRecovery) {
+        const accountHash = accounts[0]!.cellOutput.lock.hash();
+        let registered = false;
+        for (const record of data.records) {
+          if (!record.bytes || !record.accounts?.includes(accountHash)) continue;
+          if ((await this.client.getTransactionNoCache(record.quote.transactionHash))?.status === 'committed') { registered = true; break; }
+        }
+        if (!registered) throw new Error('Pilot account needs confirmed owner-authorized funding through this paymaster before automatic sponsorship');
+      }
       // Unsigned quotes do not reserve or expose a pool signature. Only validated submitted transactions lease cells.
       const leased = new Set<string>();
       for (const record of data.records.filter(r => r.bytes)) {
@@ -86,9 +122,10 @@ export class PilotPaymaster {
         if (change.capacity - fee < ccc.fixedPointFrom(change.occupiedSize)) continue;
         change.capacity -= fee;
         const quote: SponsorQuote = { version: 1, id: ccc.hashCkb(tx.toBytes()), transactionHash: tx.hash(), bytes: ccc.hexFrom(tx.toBytes()), baseBytes: bytes, fee: fee.toString(), expiresAt: Date.now() + 120_000 };
-        const first = cells[0]!.cellOutput.lock;
-        const owner = this.options.allowedCodeHashes.includes(first.codeHash) && ccc.bytesFrom(first.args).length >= 32
-          ? ccc.hexFrom(ccc.bytesFrom(first.args).slice(0, 32)) : first.hash();
+        const first = accounts[0]?.cellOutput.lock ?? cells[0]!.cellOutput.lock;
+        const owner = !accounts.length && registrationOwners.size === 1 ? [...registrationOwners][0]!
+          : (accounts.length > 0 || (this.options.allowedCodeHashes.includes(first.codeHash) && first.codeHash !== PILOT_PASSKEY_CODE_HASH)) && ccc.bytesFrom(first.args).length >= 32
+            ? ccc.hexFrom(ccc.bytesFrom(first.args).slice(0, 32)) : first.hash();
         data.records = data.records.filter(r => r.bytes || r.quote.expiresAt + 86_400_000 > Date.now());
         if (data.records.length > 50_000) throw new Error('Paymaster journal needs archival');
         const existing = data.records.find(r => r.quote.id === quote.id);
@@ -96,7 +133,7 @@ export class PilotPaymaster {
           if (!existing.bytes && existing.quote.expiresAt <= Date.now()) existing.quote = quote;
           return existing.quote;
         }
-        data.records.push({ quote, day: new Date().toISOString().slice(0, 10), owner });
+        data.records.push({ quote, day: new Date().toISOString().slice(0, 10), owner, ...(registrations.length ? { accounts: [...new Set(registrations)] } : {}) });
         return quote;
       }
       throw new Error('Paymaster has no available spendable fee capacity; no user-paid fallback');

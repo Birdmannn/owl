@@ -35,3 +35,8 @@ The `#board` page indexes all four known Pilot lock policies (counter and reusab
 Set `VITE_PILOT_SOCIAL_URL=https://api.example/api/social` before building or serving the docs to include the shared social verifier’s public paginated receipt history. The backend must include `GET /api/social/receipts`; this public read endpoint supports cross-origin access without changing mutation origin restrictions. Receipt payloads are public and backend-reported acceptance is labeled separately from chain confirmation.
 
 Private journals on another origin or device and legacy inspector-only logs cannot be queried by this site. Local records are never uploaded. Missing receipts or unavailable public sources produce retryable errors while retaining available history. Unknown app actions appear by their on-chain action/manifest hashes; custom lock code hashes require a Board catalog entry.
+
+The persistent-account page documents the new owner-recoverable account SDK, per-transaction sponsorship and browser custody limits. Its account lock is VM-tested but not deployed; account setup remains blocked in the demo until configured. The Board also recognizes the new account lock.
+# Independent wallet preview
+
+The public **Pilot passkey wallet** page documents the separate hosted signer, passkey owner, TYPE_ID authority, on-chain policies/budget and recovery. The Board also recognizes the two wallet lock formats. Its deployments remain unset; do not claim live activation. See `PILOT_WALLET.md` at the repository root for the implementation and verification record.

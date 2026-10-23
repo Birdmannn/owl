@@ -1,6 +1,6 @@
 # Deploy Pilot on Vercel
 
-The repository can serve the demo and all three APIs from one Vercel project. The sponsored contracts are already deployed on CKB testnet; the deployment outpoints are in `deployments/pilot-sponsored.json`.
+The repository can serve the demo and all three APIs from one Vercel project. The sponsored counter/delegation contracts have existing CKB testnet records in `deployments/pilot-sponsored.json`. The separate persistent-account and passkey-wallet contracts are not deployed yet.
 
 ## Two Vercel projects from the same repository
 
@@ -20,6 +20,16 @@ If a project actually has `apps/docs` as its Root Directory, change that setting
 Keep source files outside the Root Directory available for the docs build, since it imports shared deployment/script metadata. Set its public `VITE_DEMO_URL` to the demo deployment and optionally `VITE_PILOT_SOCIAL_URL` to that deployment's `/api/social` endpoint.
 
 ## Project setup
+
+### Optional independent passkey wallet project
+
+The independent wallet adds a third Vercel project rooted at `apps/wallet`, preset Vite, output `dist`. Its committed `vercel.json` runs `npm ci --prefix ../.. && npm ci` for installation and `npm run build --prefix ../.. && npm run build` for the build. Enable access to source outside the root. The wallet is static and must not receive PostgreSQL credentials, deployer keys or pool private keys.
+
+Choose a stable HTTPS wallet domain before creating durable passkeys. Set the wallet's `VITE_PILOT_PAYMASTER_URL` to the demo/backend's `/api/paymaster`; optional settings are `VITE_PILOT_WALLET_RPC` and `VITE_PILOT_WALLET_MAX_FEE`. Set `VITE_PILOT_WALLET_URL=https://wallet.example` on the demo. Include `https://wallet.example` in `PILOT_PAYMASTER_ALLOWED_ORIGINS` (or the inherited common list), because the wallet submits sponsorship requests. Do not host untrusted apps on the same origin as the wallet.
+
+Both `passkey` and `walletSession` deployment records must be configured before on-chain setup activates. The prepared explicit deployment target is `npm run paymaster:deploy -- wallet`; it spends code-cell capacity and must be reviewed/requested separately. See [PILOT_WALLET.md](PILOT_WALLET.md) for permissions, recovery, single-session and cross-device limits. Existing demo/backend and docs settings below remain in effect.
+
+### Demo/backend setup
 
 1. Import the GitHub repository into Vercel. Keep **Root Directory at the repository root**, not `apps/demo`.
 2. Select **Other** as the framework and Node.js **22.x**. The committed `vercel.json` installs the root, React wrapper and demo dependencies, builds the demo, serves `apps/demo/dist`, and routes `/api/*` to the Node function at `api/index.ts`.

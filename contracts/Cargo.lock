@@ -687,6 +687,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -780,6 +781,7 @@ dependencies = [
  "ff",
  "generic-array",
  "group",
+ "pem-rfc7468",
  "pkcs8",
  "rand_core 0.6.4",
  "sec1",
@@ -1291,10 +1293,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "p256"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "sha2",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pem-rfc7468"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
+dependencies = [
+ "base64ct",
+]
 
 [[package]]
 name = "phf"
@@ -1378,12 +1401,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "pilot-contract-tests"
+name = "pilot-account-lock"
 version = "0.1.0"
 dependencies = [
  "blake2b-ref",
+ "ckb-std",
+ "k256",
+]
+
+[[package]]
+name = "pilot-contract-tests"
+version = "0.1.0"
+dependencies = [
+ "base64ct",
+ "blake2b-ref",
  "ckb-testtool",
  "k256",
+ "p256",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1393,6 +1429,19 @@ dependencies = [
  "blake2b-ref",
  "ckb-std",
  "k256",
+]
+
+[[package]]
+name = "pilot-passkey-lock"
+version = "0.1.0"
+dependencies = [
+ "base64ct",
+ "blake2b-ref",
+ "ckb-std",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1416,6 +1465,15 @@ dependencies = [
 name = "pilot-sponsored-session-lock"
 version = "0.1.0"
 dependencies = [
+ "ckb-std",
+ "k256",
+]
+
+[[package]]
+name = "pilot-wallet-session-lock"
+version = "0.1.0"
+dependencies = [
+ "blake2b-ref",
  "ckb-std",
  "k256",
 ]
@@ -1449,6 +1507,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "primeorder"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
+dependencies = [
+ "elliptic-curve",
 ]
 
 [[package]]

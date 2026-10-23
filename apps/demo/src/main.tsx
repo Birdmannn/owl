@@ -1,3 +1,5 @@
+import { PersistentAccount } from './PersistentAccount';
+import { HostedWallet } from './HostedWallet';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ccc } from '@ckb-ccc/connector-react';
@@ -157,6 +159,8 @@ function App() {
       <div className="under"><div className="flow"><span><b>01</b> Connect</span><i>→</i><span><b>02</b> Approve once</span><i>→</i><span><b>03</b> Keep flying</span></div><span className="settlement"><i/> {settled} moves recorded on CKB</span></div>
       {transactions.length>0 && <section className="receipts"><span>ON-CHAIN RECEIPTS</span>{transactions.map(hash=><a key={hash} href={`https://testnet.explorer.nervos.org/transaction/${hash}`} target="_blank" rel="noreferrer">{short(hash)} ↗</a>)}</section>}
       <TransactionInspector storageKey={address ? sessionKey(address) : undefined} runtime={runtime} client={client} onRetry={() => { const r = active.current; if (r) flush(r); }}/>
+      <HostedWallet/>
+      <PersistentAccount owner={signer} ownerAddress={address}/>
       <OffchainSocial signer={signer} address={address} onConnectOwner={()=>open()}/>
       <UsernameTransfers signer={signer} onSent={()=>{if(signer)void signer.getBalance().then(setBalance).catch(()=>{});}}/>
       <CellDelegation profileLookupError={profileLookupError} onRetryProfile={()=>void retryProfile()} profileLoading={profileLoading} signer={signer} address={address} balance={balance} profile={profile} onConnectOwner={()=>open()} onDisconnectOwner={()=>disconnect()} onRefreshBalance={()=>{if(signer)void signer.getBalance().then(setBalance).catch(e=>setMessage(errorText(e)));}}

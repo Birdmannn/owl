@@ -178,3 +178,60 @@ test('quote identity commits application witnesses even when raw transaction has
  await verifySponsorQuote(f.client,a,qa,f.pool,100_000n);await verifySponsorQuote(f.client,b,qb,f.pool,100_000n);
  await assert.rejects(verifySponsorQuote(f.client,b,qa,f.pool,100_000n),/reviewed transaction/);
 });
+
+test('persistent account sponsorship binds the pool and charges its owner bucket even after another app input',async t=>{
+ const { PILOT_ACCOUNT_CODE_HASH, pilotAccountLock, pilotAccountSigningDigest }=await import('../src/index.js');
+ const f=await fixture(t);const owner=(await new ccc.SignerCkbPrivateKey(f.client,hash(3)).getRecommendedAddressObj()).script;
+ const descriptor={version:1 as const,deployment:{network:'testnet' as const,genesisHash:hash(8),codeHash:PILOT_ACCOUNT_CODE_HASH,outPoint:{txHash:hash(9),index:0}},ownerLock:owner,publicKey:ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(hash(2)),true)),poolLock:f.pool,maxFee:'100000'};
+ const lock=pilotAccountLock(descriptor);f.app.cellOutput.lock=lock;f.app.cellOutput.capacity=ccc.fixedPointFrom(500);f.app.outputData='0x';
+ const extra=ccc.Cell.from({outPoint:{txHash:hash(33),index:0},cellOutput:{lock:owner,capacity:ccc.fixedPointFrom(300)},outputData:'0x'});f.cells.push(extra);
+ const service=await PilotPaymaster.create({...f.paymaster.options,allowedCodeHashes:[PILOT_ACCOUNT_CODE_HASH]});
+ const base=ccc.Transaction.from({inputs:[{previousOutput:extra.outPoint},{previousOutput:f.app.outPoint}],outputs:[{lock:owner,capacity:ccc.fixedPointFrom(400)},{lock,capacity:ccc.fixedPointFrom(400)}],outputsData:['0x','0x']});
+ base.setWitnessArgs(0,{lock:'0x01'});base.setWitnessArgs(1,{lock:ccc.hexFrom(ccc.bytesConcat([1],new Uint8Array(64)))});
+ await assert.rejects(service.quote(ccc.hexFrom(base.toBytes())),/confirmed owner-authorized funding/);
+ const ownerRecovery=base.clone();ownerRecovery.setWitnessArgs(1,{lock:'0x00'});
+ assert.ok(await service.quote(ccc.hexFrom(ownerRecovery.toBytes())),'actual owner recovery does not depend on registration');
+ // An unsigned/rejected funding quote is not registration. Only a persisted, committed owner-approved setup counts.
+ const setup=ccc.Transaction.from({inputs:[{previousOutput:extra.outPoint}],outputs:[{lock,capacity:extra.cellOutput.capacity}],outputsData:['0x']});
+ const unrelated=ccc.Cell.from({outPoint:{txHash:hash(35),index:0},cellOutput:{lock:{codeHash:hash(36),hashType:'data2',args:'0x'},capacity:ccc.fixedPointFrom(100)},outputData:'0x'});f.cells.push(unrelated);
+ const mixed=setup.clone();mixed.inputs.unshift(ccc.CellInput.from({previousOutput:unrelated.outPoint}));mixed.outputs.push(unrelated.cellOutput.clone());mixed.outputsData.push('0x');
+ const mixedQuote=await service.quote(ccc.hexFrom(mixed.toBytes()));
+ const mixedJournal=JSON.parse(await readFile(f.store.file,'utf8'));assert.equal(mixedJournal.records.find((r:{quote:SponsorQuote})=>r.quote.id===mixedQuote.id).owner,owner.hash(),'owner funding quota must not come from an unrelated first input');
+ const setupQuote=await service.quote(ccc.hexFrom(setup.toBytes()));
+ await assert.rejects(service.quote(ccc.hexFrom(base.toBytes())),/confirmed owner-authorized funding/);
+ const setupOwner=new ccc.SignerCkbPrivateKey(f.client,hash(3));t.mock.method(setupOwner,'getAddressObjs',async()=>[ccc.Address.from({prefix:f.client.addressPrefix,script:owner})]);
+ const setupSigned=await setupOwner.signTransaction(ccc.Transaction.fromBytes(setupQuote.bytes));
+ await service.submit(setupQuote.id,ccc.hexFrom(setupSigned.toBytes()));
+ await assert.rejects(service.quote(ccc.hexFrom(base.toBytes())),/confirmed owner-authorized funding/);
+ // The confirmed funding pool input is consumed. A new pool cell supplies the next transaction.
+ const nextFunding=ccc.Cell.from({outPoint:{txHash:hash(34),index:0},cellOutput:{lock:f.pool,capacity:ccc.fixedPointFrom(100)},outputData:'0x'});f.cells.push(nextFunding);
+ t.mock.method(f.client,'getCellLive',async(point:ccc.OutPointLike)=>ccc.OutPoint.from(point).eq(f.funding.outPoint)?undefined:f.cells.find(c=>c.outPoint.eq(point)));
+ t.mock.method(f.client,'findCellsByLock',async function*(){yield nextFunding;});
+ t.mock.method(f.client,'getTransactionNoCache',async(hash:ccc.Hex)=>hash===setupQuote.transactionHash?{status:'committed'}:undefined);
+ const quote=await service.quote(ccc.hexFrom(base.toBytes()));const sponsored=await verifySponsorQuote(f.client,base,quote,f.pool,100_000n);
+ const sig=secp256k1.sign(ccc.bytesFrom(pilotAccountSigningDigest(sponsored,1)),ccc.bytesFrom(hash(2)),{prehash:false});sponsored.setWitnessArgs(1,{lock:ccc.hexFrom(ccc.bytesConcat([1],sig))});
+ await service.submit(quote.id,ccc.hexFrom(sponsored.toBytes()));
+ const journal=JSON.parse(await readFile(f.store.file,'utf8'));assert.equal(journal.records.find((r:{quote:SponsorQuote})=>r.quote.id===quote.id).owner,owner.hash());
+ const foreignPool=(await new ccc.SignerCkbPrivateKey(f.client,hash(7)).getRecommendedAddressObj()).script;const other=pilotAccountLock({...descriptor,poolLock:foreignPool});f.app.cellOutput.lock=other;
+ await assert.rejects(service.quote(ccc.hexFrom(base.toBytes())),/Invalid Pilot account/);
+});
+
+test('passkey wallet sponsorship requires confirmed owner funding and preserves the full owner quota',async t=>{
+ const {p256}=await import('@noble/curves/nist.js');const{sha256}=await import('@noble/hashes/sha2.js');
+ const {pilotPasskeyLock,pilotPasskeyDigest,encodePilotAssertion,base64url,verifyPilotAssertion,createPilotWalletDescriptor,pilotWalletLock,PILOT_PASSKEY_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH}=await import('../src/index.js');
+ const f=await fixture(t);const identity={credentialId:'AQID',publicKey:ccc.hexFrom(p256.getPublicKey(ccc.bytesFrom(hash(3)),true)),rpId:'wallet.example',origin:'https://wallet.example',name:'Alice'};
+ const owner=pilotPasskeyLock(identity);const proof=ccc.Cell.from({outPoint:{txHash:hash(41),index:0},cellOutput:{lock:owner,capacity:ccc.fixedPointFrom(1000)},outputData:'0x'});f.cells.push(proof);
+ const deployment:Deployment={network:'testnet',genesisHash:hash(8),codeHash:PILOT_WALLET_SESSION_CODE_HASH,outPoint:{txHash:hash(9),index:0}};
+ const descriptor=createPilotWalletDescriptor(owner,deployment,f.pool,100000n,{previousOutput:proof.outPoint});const lock=pilotWalletLock(descriptor);f.app.cellOutput.lock=lock;f.app.outputData='0x';
+ const service=await PilotPaymaster.create({...f.paymaster.options,allowedCodeHashes:[PILOT_PASSKEY_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH]});
+ const action=ccc.Transaction.from({inputs:[{previousOutput:f.app.outPoint}],outputs:[f.app.cellOutput],outputsData:['0x']});action.setWitnessArgs(0,{lock:ccc.hexFrom(ccc.bytesConcat([1],new Uint8Array(64)))});
+ await assert.rejects(service.quote(ccc.hexFrom(action.toBytes())),/confirmed owner-authorized funding/);
+ const setup=ccc.Transaction.from({inputs:[{previousOutput:proof.outPoint}],outputs:[{lock,capacity:proof.cellOutput.capacity}],outputsData:['0x']});setup.setWitnessArgs(0,{lock:ccc.hexFrom(new Uint8Array(620))});
+ const quote=await service.quote(ccc.hexFrom(setup.toBytes()));await assert.rejects(service.quote(ccc.hexFrom(action.toBytes())),/confirmed owner-authorized funding/);
+ const signed=ccc.Transaction.fromBytes(quote.bytes),challenge=pilotPasskeyDigest(signed,0,1);const auth=ccc.bytesConcat(sha256(new TextEncoder().encode(identity.rpId)),[5],new Uint8Array(4));const json=new TextEncoder().encode(JSON.stringify({type:'webauthn.get',origin:identity.origin,challenge:base64url(ccc.bytesFrom(challenge)),crossOrigin:false}));const assertion={authenticatorData:ccc.hexFrom(auth),clientDataJSON:ccc.hexFrom(json),signature:ccc.hexFrom(p256.sign(sha256(ccc.bytesConcat(auth,sha256(json))),ccc.bytesFrom(hash(3)),{prehash:false}))};assert.equal(verifyPilotAssertion(identity,challenge,assertion),true);signed.setWitnessArgs(0,{lock:encodePilotAssertion(assertion,1)});await service.submit(quote.id,ccc.hexFrom(signed.toBytes()));
+ await assert.rejects(service.quote(ccc.hexFrom(action.toBytes())),/confirmed owner-authorized funding/);
+ const fresh=ccc.Cell.from({outPoint:{txHash:hash(42),index:0},cellOutput:{lock:f.pool,capacity:ccc.fixedPointFrom(100)},outputData:'0x'});f.cells.push(fresh);t.mock.method(f.client,'getCellLive',async(p:ccc.OutPointLike)=>ccc.OutPoint.from(p).eq(f.funding.outPoint)?undefined:f.cells.find(c=>c.outPoint.eq(p)));t.mock.method(f.client,'findCellsByLock',async function*(){yield fresh;});t.mock.method(f.client,'getTransactionNoCache',async(h:ccc.Hex)=>h===quote.transactionHash?{status:'committed'}:undefined);
+ const next=await service.quote(ccc.hexFrom(action.toBytes()));const data=JSON.parse(await readFile(f.store.file,'utf8'));assert.equal(data.records.find((r:{quote:SponsorQuote})=>r.quote.id===next.id).owner,owner.hash());assert.equal(data.records.find((r:{quote:SponsorQuote})=>r.quote.id===quote.id).owner,owner.hash());
+ // Root owner-only transactions use the full owner hash too, not a truncated P-256 public key.
+ const root=ccc.Transaction.from({inputs:[{previousOutput:proof.outPoint}],outputs:[proof.cellOutput],outputsData:['0x']});root.setWitnessArgs(0,{lock:ccc.hexFrom(new Uint8Array(620))});const rootQuote=await service.quote(ccc.hexFrom(root.toBytes()));const latest=JSON.parse(await readFile(f.store.file,'utf8'));assert.equal(latest.records.find((r:{quote:SponsorQuote})=>r.quote.id===rootQuote.id).owner,owner.hash());
+});

@@ -1,3 +1,5 @@
+import { PILOT_ACCOUNT_CODE_HASH } from '../../../src/ckb/account-code.ts';
+import { PILOT_PASSKEY_CODE_HASH, PILOT_WALLET_SESSION_CODE_HASH } from '../../../src/wallet/code.ts';
 import { ccc } from '@ckb-ccc/core';
 import manifest from '../../../deployments/testnet.json' with { type: 'json' };
 import { SPONSORED_COUNTER_CODE_HASH, SPONSORED_DELEGATION_CODE_HASH } from '../../../src/ckb/sponsored-code.ts';
@@ -46,6 +48,9 @@ export const boardPolicies = [
   { id: 'delegation-v1', name: 'App delegation', codeHash: DELEGATION_V1_CODE_HASH, argsLength: null, argsExtra: 0 },
   { id: 'counter-sponsored-v1', name: 'Sponsored counter', codeHash: SPONSORED_COUNTER_CODE_HASH, argsLength: 113 },
   { id: 'delegation-sponsored-v1', name: 'Sponsored app delegation', codeHash: SPONSORED_DELEGATION_CODE_HASH, argsLength: null, argsExtra: 32 },
+  { id: 'account-v1', name: 'Persistent Pilot account', codeHash: PILOT_ACCOUNT_CODE_HASH, argsLength: 105 },
+  { id: 'passkey-v1', name: 'Pilot passkey owner', codeHash: PILOT_PASSKEY_CODE_HASH, argsLength: 97 },
+  { id: 'wallet-session-v1', name: 'Pilot wallet session', codeHash: PILOT_WALLET_SESSION_CODE_HASH, argsLength: 104 },
 ];
 export const socialBoardUrl = (import.meta.env?.VITE_PILOT_SOCIAL_URL || '').replace(/\/$/, '');
 function policyOf(lock) {
@@ -94,15 +99,18 @@ export async function loadBoardPage(cursor) {
       if (!related.length) return; // Validate indexer matches against actual locks.
       const policies = distinct(related.map(output => policyOf(output.lock).name));
       let witness;
-      try { witness = tx.getWitnessArgs(0)?.lock; } catch { /* Unknown witness remains inspectable. */ }
+      try { witness = tx.getWitnessArgs(Math.max(0, inputs.findIndex(output => policyOf(output.lock))))?.lock; } catch { /* Unknown witness remains inspectable. */ }
       const witnessBytes = witness ? ccc.bytesFrom(witness) : [];
-      const signer = incoming.length && witnessBytes[0] === 1 && [65, 97].includes(witnessBytes.length) ? 'Pilot session key'
+      const isAccount = related.some(output => policyOf(output.lock).id === 'account-v1');
+      const isWallet = related.some(output => policyOf(output.lock).id === 'wallet-session-v1');
+      const isPasskey = related.some(output => policyOf(output.lock).id === 'passkey-v1');
+      const signer = isWallet && witness === '0x00' || isPasskey && !isWallet ? 'Pilot passkey' : incoming.length && witnessBytes[0] === 1 && [65, 97].includes(witnessBytes.length) ? isAccount ? 'Pilot account key' : 'Pilot session key'
         : !incoming.length || witness === '0x00' ? 'Owner wallet' : 'See transaction witnesses';
-      const action = !incoming.length ? 'Session setup / funding' : !outgoing.length ? 'Recovery / session close'
+      const action = isWallet ? witnessBytes[0] === 1 ? 'Wallet session action' : 'Passkey grant / recovery' : isPasskey ? 'Passkey owner transaction' : isAccount && incoming.length && signer === 'Pilot account key' ? 'Pilot account action' : !incoming.length ? 'Session setup / funding' : !outgoing.length ? 'Recovery / session close'
         : signer === 'Pilot session key' ? related.some(output => policyOf(output.lock).id.startsWith('delegation-')) ? 'Delegated app action' : 'Counter increment' : 'Owner app transition';
       const actionHash = witnessBytes.length === 97 && witnessBytes[0] === 1 ? ccc.hexFrom(witnessBytes.slice(1, 33)) : undefined;
-      const sessionKeys = distinct(related.map(output => ccc.hexFrom(ccc.bytesFrom(output.lock.args).slice(32, 65))));
-      const owners = distinct(related.map(output => ccc.hexFrom(ccc.bytesFrom(output.lock.args).slice(0, 32))));
+      const sessionKeys = distinct(related.filter(output => !['passkey-v1','wallet-session-v1'].includes(policyOf(output.lock).id)).map(output => ccc.hexFrom(ccc.bytesFrom(output.lock.args).slice(32, 65))));
+      const owners = distinct(related.map(output => policyOf(output.lock).id === 'passkey-v1' ? output.lock.hash() : ccc.hexFrom(ccc.bytesFrom(output.lock.args).slice(0, 32))));
       const manifests = distinct(related.filter(output => policyOf(output.lock).id.startsWith('delegation-')).map(output => ccc.hexFrom(ccc.bytesFrom(output.lock.args).slice(65, 97))));
       const block = BigInt(receipt.blockNumber ?? record.blockNumber).toString();
       if (!headers.has(block)) headers.set(block, client.getHeaderByNumberNoCache(BigInt(block)));

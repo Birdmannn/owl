@@ -15,3 +15,8 @@ export * from './paymaster.js';
 
 export * from './ckb/sponsored-code.js';
 export * from './budget.js';
+export * from './ckb/account.js';
+export * from './wallet/code.js';
+export * from './wallet/passkey.js';
+export * from './wallet/session.js';
+export * from './wallet/provider.js';
