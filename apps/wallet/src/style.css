@@ -130,3 +130,60 @@ footer { display: flex; justify-content: space-between; gap: 14px; padding: 20px
 .embedded .intro p { font-size: 12px; }
 .embedded .preview-note { margin-bottom: 14px; }
 .embedded .preview-note summary { padding: 11px 0; }
+
+/* Focused SDK screens reuse the original Pilot modal's visual language. */
+[hidden] { display: none !important; }
+html:not(.embedded) .welcome-card,
+html:not(.embedded) .profile-card,
+html:not(.embedded) .modal-heading,
+html:not(.embedded) .modal-back { display: none; }
+.embedded, .embedded body { background: #192e23; }
+.embedded main { max-width: 510px; padding: 0 28px 24px; }
+.embedded .wallet-header { height: 54px; border: 0; margin-bottom: 14px; }
+.embedded .brand img { width: 32px; height: 32px; }
+.embedded .brand > span { font-size: 23px; letter-spacing: -.7px; }
+.embedded .brand small { display: inline; font-size: 9px; letter-spacing: 0; margin-left: 6px; }
+.embedded .network { border: 0; font-size: 8px; padding-right: 0; text-transform: uppercase; letter-spacing: 1px; }
+.embedded .intro, .embedded .preview-note, .embedded .trust-strip,
+.embedded footer, .embedded section > .eyebrow,
+.embedded .account-card > h2, .embedded .account-card > .section-description,
+.embedded .approval-card > h2 { display: none; }
+.embedded .modal-heading { font-size: 28px; line-height: 1.2; margin: 0 0 18px; letter-spacing: -.7px; }
+.embedded .modal-heading:focus { outline: none; }
+.embedded .modal-back { padding: 4px 0; margin: 0 0 14px; border: 0; background: none; color: var(--muted); }
+.embedded .requesting-origin { padding: 0; margin: 0 0 18px; border: 0; background: none; display: block; }
+.embedded .requesting-origin small { font-size: 8px; color: #8ea975; }
+.embedded .requesting-origin .origin { font-size: 11px; margin-top: 5px; }
+.embedded .workspace { display: block; }
+.embedded section { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.embedded .welcome-card > p:first-child { margin-top: 0; }
+.pilot-wallet-choice { display: flex; align-items: center; gap: 14px; width: 100%; padding: 20px 16px; border: 1px solid #5b7445; border-radius: 9px; background: #253d2a; color: #dceccc; margin: 24px 0; }
+.pilot-wallet-choice img { width: 42px; height: 42px; object-fit: contain; }
+.pilot-wallet-choice span { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.pilot-wallet-choice strong { font-size: 22px; font-weight: 500; }
+.pilot-wallet-choice small { font-size: 10px; color: #aac598; line-height: 1.6; }
+.pilot-wallet-choice b { margin-left: auto; color: var(--lime); font-size: 22px; }
+.auth-modes { display: flex; gap: 8px; margin-bottom: 18px; }
+.auth-modes button { flex: 1; margin: 0; }
+.auth-modes [aria-pressed=true] { border-color: var(--lime); color: var(--lime); background: #253d2a; }
+.embedded .account-card > button { width: 100%; margin-right: 0; }
+.embedded label { font-size: 11px; }
+.embedded .policy { padding: 16px; border-color: #48613b; background: #14281d; margin: 10px 0 16px; }
+.embedded .policy label { font-size: 13px; font-weight: 500; }
+.embedded .app-request { border: 0; padding: 0; margin-top: 0; background: none; font-size: 14px; color: #dcebcf; }
+.embedded .policy-help { margin: 14px 0; }
+.embedded .funding-details, .embedded .backup-tools, .embedded .profile-tools { border-top: 1px solid var(--line); margin-top: 18px; }
+.funding-details code { display: block; color: #c9ddb7; }
+.pilot-account-summary { padding: 15px; border: 1px solid #405b35; background: #102219; border-radius: 8px; margin-bottom: 20px; }
+.pilot-account-summary > strong { display: block; font-size: 15px; }
+.pilot-account-summary > small { font-size: 9px; margin: 6px 0 12px; color: #89a475; }
+.pilot-account-summary code { display: block; color: #859f73; font-size: 10px; }
+.pilot-account-summary button { padding: 5px 0; border: 0; background: none; color: var(--lime); font-size: 10px; }
+.pilot-account-summary p { font-size: 11px; }
+.embedded .full { width: 100%; margin-right: 0; }
+.embedded .activity-card { margin: 18px 0 0; padding: 0; border-width: 1px 0 0; border-radius: 0; background: none; }
+.embedded .activity-card summary { font-size: 12px; padding: 15px 0; }
+.embedded .management-card { margin-top: 0; }
+.embedded .management-card h2 { display: none; }
+.embedded .management-card > button { display: block; width: 100%; margin-right: 0; text-align: left; }
+@media (max-width: 370px) { .embedded main { padding: 0 20px 20px; } .embedded .modal-heading { font-size: 26px; } }

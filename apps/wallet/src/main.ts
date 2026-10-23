@@ -191,8 +191,31 @@ let busy = false;
 let pendingConnect:
   { request: PilotWalletConnect; envelope: PilotWalletEnvelope } | undefined;
 let selectedPolicies: number[] = [];
+type ModalStep = "welcome" | "signin" | "permissions" | "profile";
+let modalStep: ModalStep = "welcome";
+let createMode = passkeys.length === 0;
+const modalHeading = node("h2", "Welcome to Pilot");
+modalHeading.className = "modal-heading";
+modalHeading.tabIndex = -1;
+const modalBack = node("button", "← Back");
+modalBack.className = "modal-back";
+modalBack.onclick = () => goTo(modalStep === "signin" ? "welcome" : "profile");
 const workspace = node("div");
 workspace.className = "workspace";
+const welcome = node("section", undefined, workspace);
+welcome.className = "welcome-card";
+node("p", "Your Pilot account. One passkey. Fewer interruptions.", welcome);
+const enter = node("button", undefined, welcome);
+enter.className = "pilot-wallet-choice";
+const enterIcon = node("img", undefined, enter);
+enterIcon.src = "/owl.png";
+enterIcon.alt = "";
+const enterText = node("span", undefined, enter);
+node("strong", "Pilot", enterText);
+node("small", "Create an account or sign in with your passkey", enterText);
+node("b", "→", enter);
+enter.onclick = () => goTo("signin");
+node("p", "Your passkey owns your account. You choose the actions each app may perform.", welcome).className = "fine";
 const accounts = node("section", undefined, workspace);
 accounts.className = "account-card";
 accounts.id = "accounts";
@@ -218,6 +241,7 @@ select.onchange = () => {
   session = undefined;
   connection = undefined;
   showOwner();
+  void renderLogs();
 };
 const addresses = node("div", undefined, accounts);
 addresses.className = "addresses";
@@ -253,6 +277,12 @@ function showOwner() {
   balances.textContent =
     "Refresh balances to check available owner/account funds.";
 }
+const authModes = node("div", undefined, accounts);
+authModes.className = "auth-modes";
+const existingMode = node("button", "Sign in", authModes);
+existingMode.onclick = () => { createMode = false; renderModal(); };
+const newMode = node("button", "Create account", authModes);
+newMode.onclick = () => { createMode = true; renderModal(); };
 const label = node("label", "Account name", accounts);
 const name = node("input", undefined, label);
 name.placeholder = "e.g. My everyday wallet";
@@ -286,7 +316,7 @@ async function run(fn: () => Promise<void>) {
       HTMLButtonElement | HTMLInputElement | HTMLSelectElement
     >("button,input,select"))
       b.disabled = false;
-    grant.disabled = !ready || !pendingConnect;
+    renderModal();
   }
 }
 const createPasskey = button("Create Pilot passkey", async () => {
@@ -300,11 +330,13 @@ const createPasskey = button("Create Pilot passkey", async () => {
   renderAccounts();
   select.value = p.credentialId;
   showOwner();
+  await renderLogs();
   status.textContent =
     "Passkey created. Its owner private key remains in your authenticator.";
+  if (embedded) goTo(pendingConnect ? "permissions" : "profile");
 });
 createPasskey.className = "primary";
-button("Sign in with passkey", async () => {
+const signIn = button("Sign in with passkey", async () => {
   if (!selected) throw new Error("Select an account first");
   await assertOwner(
     selected,
@@ -312,10 +344,12 @@ button("Sign in with passkey", async () => {
   );
   authenticated = true;
   showOwner();
+  await renderLogs();
   status.textContent =
     "Passkey verified. Review the requesting app before authorizing a session.";
+  if (embedded) goTo(pendingConnect ? "permissions" : "profile");
 });
-button("Refresh balances", async () => {
+async function refreshAvailableBalances() {
   if (!selected) throw new Error("Select an account");
   const owner = await client.getBalanceSingle(pilotPasskeyLock(selected));
   const raw = localStorage.getItem(accountKey(selected));
@@ -323,7 +357,10 @@ button("Refresh balances", async () => {
     ? await client.getBalanceSingle(pilotWalletLock(JSON.parse(raw)))
     : 0n;
   balances.textContent = `Passkey owner: ${ccc.fixedPointToString(owner)} CKB. Session account: ${ccc.fixedPointToString(account)} CKB. State/asset occupied capacity is part of these balances.`;
-});
+  profileBalance.textContent = balances.textContent;
+  fundingBalance.textContent = balances.textContent;
+}
+const refreshBalances = button("Refresh balances", refreshAvailableBalances);
 const backup = node("details", undefined, accounts);
 backup.className = "backup-tools";
 node("summary", "Backup & restore", backup);
@@ -367,6 +404,8 @@ restore.onchange = () =>
   void run(async () => {
     const f = restore.files?.[0];
     if (!f) return;
+    if (connection || session)
+      throw new Error("Disconnect and settle the active app before restoring another account.");
     if (f.size > 30000) throw new Error("Recovery file too large");
     const v = JSON.parse(await f.text()) as {
       passkey: PilotPasskey;
@@ -395,12 +434,14 @@ restore.onchange = () =>
     showOwner();
     status.textContent =
       "Public descriptor restored. Sign in with its original passkey. This file contains no private keys.";
+    createMode = false;
+    if (embedded) goTo("signin");
   });
 const review = node("section", undefined, workspace);
 review.className = "approval-card";
 review.id = "permissions";
 node("span", "02 / YOU SET THE RULES", review).className = "eyebrow";
-node("h2", "App session approval", review);
+node("h2", "Sign these on my behalf", review);
 const appName = node("p", "No app is requesting a connection.", review);
 appName.className = "app-request";
 const policyList = node("div", undefined, review);
@@ -478,7 +519,7 @@ const grant = button(
             }
           if (!seed)
             throw new Error(
-              "Fund the passkey owner address shown above first. Keep at least one ordinary owner cell for recovery.",
+              "Open “Fund your Pilot account” and fund the displayed passkey owner address first. Keep an ordinary owner cell for recovery.",
             );
           account = createPilotWalletDescriptor(
             pilotPasskeyLock(ownerSelection),
@@ -552,6 +593,7 @@ const grant = button(
         status.textContent =
           "Session confirmed on-chain. You can close the modal. Pilot stays connected for approved actions.";
         await renderLogs();
+        if (embedded) goTo("profile");
       },
     );
   },
@@ -559,6 +601,30 @@ const grant = button(
 );
 grant.className = "primary";
 grant.disabled = true;
+const profile = node("section", undefined, workspace);
+profile.className = "profile-card";
+const profileSummary = node("div", undefined, profile);
+profileSummary.className = "pilot-account-summary";
+const profileName = node("strong", "Pilot", profileSummary);
+node("small", "Passkey account · CKB Testnet", profileSummary);
+const profileAddress = node("code", undefined, profileSummary);
+button("Copy address", async () => {
+  if (!selected) throw new Error("Sign in first");
+  await navigator.clipboard.writeText(profileAddress.textContent ?? "");
+  status.textContent = "Address copied.";
+}, profileSummary);
+const profileBalance = node("p", "Refresh to see your balance.", profileSummary);
+button("Refresh balance", refreshAvailableBalances, profileSummary);
+button("Review permissions", async () => goTo("permissions"), profile).className = "primary full";
+const profileHint = node("p", undefined, profile);
+const funding = node("details", undefined, review);
+funding.className = "funding-details";
+node("summary", "Fund your Pilot account", funding);
+node("p", "Send CKB to this passkey owner address before approving. Your spending limit and recoverable account storage are funded separately from sponsored network fees. Keep an ordinary owner cell available for recovery.", funding);
+const fundingAddress = node("code", undefined, funding);
+const fundRefresh = node("button", "Refresh balances", funding);
+fundRefresh.onclick = () => refreshBalances.click();
+const fundingBalance = node("p", undefined, funding);
 const management = node("section");
 management.className = "management-card";
 node("span", "03 / ALWAYS YOURS", management).className = "eyebrow";
@@ -592,7 +658,7 @@ button(
   management,
 );
 button(
-  "Recover ordinary CKB with passkey",
+  "End session & reclaim CKB",
   async () => {
     if (
       !(await confirmReview(
@@ -644,13 +710,78 @@ const logBody = node("pre", "No account selected.", logs);
 const footer = node("footer");
 node("span", "PILOT / BY OWL", footer);
 node("span", "Less signing. More doing.", footer);
+if (embedded) {
+  // A modal has one task per screen; recovery and receipts belong in the profile.
+  header.after(modalBack, modalHeading);
+  const advanced = node("details", undefined, profile);
+  advanced.className = "profile-tools";
+  node("summary", "Session & recovery", advanced);
+  advanced.append(management);
+  profile.append(logs, backup);
+}
+function goTo(step: ModalStep) {
+  modalStep = step;
+  renderModal();
+  if (embedded) {
+    modalHeading.focus();
+    window.scrollTo(0, 0);
+  }
+}
+function renderModal() {
+  grant.disabled = !ready || !pendingConnect || !authenticated || !selectedPolicies.length || busy;
+  if (!embedded) {
+    welcome.hidden = profile.hidden = modalHeading.hidden = modalBack.hidden = authModes.hidden = funding.hidden = true;
+    return;
+  }
+  welcome.hidden = modalStep !== "welcome";
+  accounts.hidden = modalStep !== "signin";
+  review.hidden = modalStep !== "permissions";
+  profile.hidden = modalStep !== "profile";
+  modalHeading.textContent = modalStep === "welcome" ? "Welcome to Pilot"
+    : modalStep === "signin" ? (createMode ? "Create your Pilot account" : "Sign in to Pilot")
+    : modalStep === "permissions" ? "Sign these on my behalf" : (selected?.name || "Your Pilot profile");
+  modalBack.hidden = modalStep === "welcome" || modalStep === "profile" || (modalStep === "permissions" && !authenticated);
+  (modalStep === "signin" ? accounts : profile).append(backup);
+  modalBack.disabled = busy;
+  existingMode.disabled = busy || !passkeys.length;
+  existingMode.setAttribute("aria-pressed", String(!createMode));
+  newMode.disabled = busy;
+  newMode.setAttribute("aria-pressed", String(createMode));
+  select.hidden = createMode;
+  label.hidden = createPasskey.hidden = !createMode;
+  signIn.hidden = createMode;
+  addresses.hidden = balances.hidden = refreshBalances.hidden = true;
+  profileName.textContent = selected?.name || "Pilot";
+  profileAddress.textContent = connection?.address || ownerAddress.textContent;
+  fundingAddress.textContent = selected ? ownerAddress.textContent : "Sign in to see your funding address.";
+  fundingBalance.textContent = balances.textContent;
+  profileHint.textContent = connection
+    ? "Pilot is ready. Only your approved actions may run automatically."
+    : "Review this app’s permissions to connect. No automatic actions are approved yet.";
+  for (const box of policyList.querySelectorAll<HTMLInputElement>("input")) box.disabled = busy || !pendingConnect;
+  budget.disabled = busy || !pendingConnect;
+}
+renderModal();
+if (embedded && peer) {
+  const resize = new ResizeObserver(() => {
+    peer.postMessage({
+      protocol: PILOT_WALLET_PROTOCOL, channel, id: "resize", method: "resize",
+      params: { height: Math.ceil(root.getBoundingClientRect().height) },
+    }, appOrigin);
+  });
+  resize.observe(root);
+}
 async function renderLogs(e = session) {
-  if (e)
-    logBody.textContent = JSON.stringify(
-      await e.options.journal.load(),
-      null,
-      2,
-    );
+  let journal = e ? await e.options.journal.load() : undefined;
+  if (!journal && selected) {
+    const raw = localStorage.getItem(accountKey(selected));
+    if (raw) {
+      const account = parsePilotWalletDescriptor(JSON.parse(raw));
+      const saved = localStorage.getItem("pilot:wallet:journal:" + pilotWalletLock(account).hash());
+      if (saved) journal = JSON.parse(saved) as PilotWalletJournal;
+    }
+  }
+  logBody.textContent = journal ? JSON.stringify(journal, null, 2) : "No saved account receipts yet.";
 }
 function accountKey(p: PilotPasskey) {
   return "pilot:wallet:account:" + p.publicKey + ":testnet";
@@ -781,13 +912,14 @@ window.addEventListener("message", (event) => {
           selectedPolicies = box.checked
             ? [...selectedPolicies, i]
             : selectedPolicies.filter((n) => n !== i);
+          renderModal();
         };
         l.append(document.createTextNode(p.name));
         const technical = node("details", undefined, policy);
         node("summary", "View policy details", technical);
         node("pre", JSON.stringify(p, null, 2), technical);
       });
-      grant.disabled = !ready;
+      renderModal();
     } catch (e) {
       reply(request, undefined, e instanceof Error ? e.message : String(e));
     }
@@ -856,6 +988,7 @@ window.addEventListener("message", (event) => {
     .finally(() => {
       operation = false;
       void renderLogs();
+      renderModal();
     });
 });
 if (peer && appOrigin && channel)

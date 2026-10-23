@@ -151,3 +151,7 @@ For Vercel, add a third project rooted at `apps/wallet` using its `vercel.json`,
 ## Embedded UI trust boundary
 
 The app can position, hide or overlay its embedded frame. Origin-bound messages, WebAuthn parent checks and wallet-side policy validation do not make a malicious embedding page a trusted transaction display. Review the actual requesting app origin and permissions. The wallet signer origin remains trusted and session keys remain software-accessible there. This preview does not claim protection against all clickjacking, malicious-app presentation, every browser’s third-party storage rules or credential loss. A broader supported-device matrix and authenticated discovery/receipt backup remain V2 work.
+
+## Compact modal presentation
+
+The embedded SDK modal follows the original demo’s visual style with one task per screen: Welcome to Pilot → sign in or create a Pilot passkey account → select permissions and budget → profile. The isolated iframe is a signing boundary, not a full website/dashboard shown in a modal. The profile holds balances, address copying, permission review, expandable queue/all receipts, recovery and public backups. Sign-in can select a known Pilot passkey or import a public descriptor; account names remain local labels. There is no external owner-wallet, Add wallet or Add JoyID step. The standalone wallet keeps its recovery dashboard. Closing the modal keeps the isolated signer mounted; on-chain authority and fee sponsorship are unchanged. No new contract deployment is required for this UI change.

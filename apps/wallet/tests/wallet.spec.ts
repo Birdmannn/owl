@@ -27,6 +27,24 @@ async function authenticator(context: BrowserContext, page: Page | Frame) {
   });
   return cdp;
 }
+async function enterPilot(page: Page) {
+  const wallet = page.frameLocator("iframe");
+  await expect(wallet.getByRole("heading", { name: "Welcome to Pilot", exact: true })).toBeVisible();
+  await expect(wallet.getByRole("checkbox")).toHaveCount(0);
+  await expect(wallet.getByRole("checkbox")).not.toBeVisible();
+  await expect(wallet.getByRole("button", { name: /Add JoyID|Add account \/ choose wallet|Connect owner wallet/ })).toHaveCount(0);
+  await wallet.getByRole("button", { name: /^Pilot Create an account/ }).click();
+  return wallet;
+}
+async function returnWithPasskey(page: Page) {
+  await page.reload();
+  await page.getByRole("button", { name: "Connect Pilot", exact: true }).click();
+  const wallet = await enterPilot(page);
+  await wallet.getByLabel("Pilot account").selectOption({ index: 1 });
+  await wallet.getByRole("button", { name: "Sign in with passkey", exact: true }).click();
+  await expect(wallet.locator("#status")).toContainText("Passkey verified");
+  return wallet;
+}
 test("real browser WebAuthn registers and verifies a passkey without storing an owner private key", async ({
   page,
   context,
@@ -89,18 +107,13 @@ test("the SDK embeds the wallet in a modal with real cross-origin WebAuthn and s
   await expect(dialog).toBeVisible();
   await expect(page.locator("iframe")).toHaveCount(1);
   expect(context.pages()).toHaveLength(1);
-  const wallet = page.frameLocator("iframe");
-  await expect(
-    wallet.getByText("External test app — http://localhost:5177"),
-  ).toBeVisible();
-  await expect(
-    wallet.getByRole("checkbox", { name: "Like posts", exact: true }),
-  ).not.toBeChecked();
+  const wallet = await enterPilot(page);
+  await expect(wallet.locator(".origin")).toHaveText("http://localhost:5177");
   const frame = page
     .frames()
     .find((f) => f.url().startsWith("http://localhost:5176/"))!;
   await authenticator(context, frame);
-  await frame.evaluate(() => {
+  await context.addInitScript(() => {
     const get = navigator.credentials.get.bind(navigator.credentials);
     navigator.credentials.get = async (options) => {
       const result = await get(options);
@@ -119,12 +132,14 @@ test("the SDK embeds the wallet in a modal with real cross-origin WebAuthn and s
     .getByRole("button", { name: "Create Pilot passkey", exact: true })
     .click();
   await expect(wallet.locator("#status")).toContainText("Passkey created");
-  await wallet
-    .getByRole("button", { name: "Sign in with passkey", exact: true })
-    .click();
-  await expect(wallet.locator("#status")).toContainText("Passkey verified");
+  await expect(wallet.getByRole("heading", { name: "Sign these on my behalf", exact: true })).toBeVisible();
+  await expect(wallet.getByRole("checkbox", { name: "Like posts", exact: true })).not.toBeChecked();
+  await expect(wallet.locator("#accounts")).not.toBeVisible();
+  await expect(wallet.getByText("Session and recovery", { exact: true })).not.toBeVisible();
+  const signedInWallet = await returnWithPasskey(page);
+  const signedInFrame = page.frames().find((f) => f.url().startsWith("http://localhost:5176/"))!;
   expect(
-    await frame.evaluate(
+    await signedInFrame.evaluate(
       () =>
         (window as unknown as { testAssertionContext: unknown })
           .testAssertionContext,
@@ -182,14 +197,20 @@ test("the SDK embeds the wallet in a modal with real cross-origin WebAuthn and s
   await expect(page.locator("body > p")).toHaveText("Waiting");
   await page.getByRole("button", { name: "Close Pilot wallet" }).click();
   await expect(dialog).not.toBeVisible();
-  expect(page.frames().includes(frame)).toBe(true);
+  expect(page.frames().includes(signedInFrame)).toBe(true);
   await page.evaluate(() =>
     (
       window as unknown as { pilotTestProvider: { open(): void } }
     ).pilotTestProvider.open(),
   );
   await expect(dialog).toBeVisible();
-  await expect(wallet.getByLabel("Pilot account")).toHaveValue(/.+/);
+  await expect(signedInWallet.getByRole("heading", { name: "Sign these on my behalf", exact: true })).toBeVisible();
+  await signedInWallet.getByRole("button", { name: "← Back", exact: true }).click();
+  await expect(signedInWallet.getByRole("heading", { name: "Alice", exact: true })).toBeVisible();
+  await expect(signedInWallet.getByText("Queue and all account receipts", { exact: true })).toBeVisible();
+  await expect(signedInWallet.getByRole("checkbox")).not.toBeVisible();
+  await signedInWallet.getByRole("button", { name: "Review permissions", exact: true }).click();
+  await expect(signedInWallet.getByRole("checkbox", { name: "Like posts", exact: true })).not.toBeChecked();
 });
 test("account switching needs the selected passkey and public recovery import never imports keys", async ({
   page,
@@ -330,10 +351,8 @@ test("passkeys work in a genuinely cross-site embedded wallet without a new brow
   await page
     .getByRole("button", { name: "Connect Pilot", exact: true })
     .click();
-  const wallet = page.frameLocator("iframe");
-  await expect(
-    wallet.getByText("External test app — http://127.0.0.1:5177"),
-  ).toBeVisible();
+  const wallet = await enterPilot(page);
+  await expect(wallet.locator(".origin")).toHaveText("http://127.0.0.1:5177");
   const frame = page
     .frames()
     .find((f) => f.url().startsWith("http://localhost:5176/"))!;
@@ -345,10 +364,7 @@ test("passkeys work in a genuinely cross-site embedded wallet without a new brow
     .getByRole("button", { name: "Create Pilot passkey", exact: true })
     .click();
   await expect(wallet.locator("#status")).toContainText("Passkey created");
-  await wallet
-    .getByRole("button", { name: "Sign in with passkey", exact: true })
-    .click();
-  await expect(wallet.locator("#status")).toContainText("Passkey verified");
+  await returnWithPasskey(page);
   expect(context.pages()).toHaveLength(1);
 });
 
@@ -366,7 +382,7 @@ test("blocked embedded storage fails closed before creating a passkey and never 
   await page
     .getByRole("button", { name: "Connect Pilot", exact: true })
     .click();
-  const wallet = page.frameLocator("iframe");
+  const wallet = await enterPilot(page);
   await expect(wallet.getByText(/Your browser blocks storage/)).toBeVisible();
   await wallet
     .getByLabel("Account name", { exact: true })

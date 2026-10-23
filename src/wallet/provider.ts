@@ -81,6 +81,12 @@ export class PilotWalletProvider {
     )
       return;
     const v = event.data;
+    if (v.method === "resize") {
+      const height = (v.params as { height?: unknown } | undefined)?.height;
+      if (typeof height === "number" && Number.isSafeInteger(height) && this.dialog)
+        this.dialog.style.setProperty("--pilot-height", `${Math.min(1600, Math.max(240, height)) + 48}px`);
+      return;
+    }
     if (v.method === "ready") {
       this.ready?.();
       return;
@@ -100,20 +106,18 @@ export class PilotWalletProvider {
     if (this.options.styleNonce) style.nonce = this.options.styleNonce;
     style.textContent = `
       :host{color-scheme:dark}
-      dialog{box-sizing:border-box;width:min(500px,calc(100vw - 24px));height:min(850px,calc(100dvh - 24px));max-width:none;max-height:none;padding:0;border:1px solid #496040;border-radius:16px;background:#10241c;color:#ecf0e5;overflow:hidden;box-shadow:0 24px 100px #0008}
+      dialog{box-sizing:border-box;width:min(510px,calc(100vw - 24px));height:min(var(--pilot-height,660px),calc(100dvh - 24px));max-width:none;max-height:none;padding:0;border:1px solid #496040;border-radius:16px;background:#192e23;color:#ecf0e5;overflow:hidden;box-shadow:0 24px 100px #0008}
       dialog::backdrop{background:#040d09b8;backdrop-filter:blur(5px)}
-      header{height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #354c3b;font:12px system-ui,sans-serif}
+      header{height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font:12px system-ui,sans-serif}
       span{color:#b5c5ac;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 12px}
       button{border:1px solid #53694d;background:#192e23;color:#ecf0e5;border-radius:6px;font:12px system-ui,sans-serif;padding:5px 10px;cursor:pointer}
       button:focus-visible{outline:2px solid #c7f881;outline-offset:3px}
-      iframe{display:block;border:0;width:100%;height:calc(100% - 48px);background:#10241c}
+      iframe{display:block;border:0;width:100%;height:calc(100% - 48px);background:#192e23}
       @media(prefers-reduced-motion:reduce){dialog::backdrop{backdrop-filter:none}}
     `;
     this.dialog = document.createElement("dialog");
     this.dialog.setAttribute("aria-label", "Pilot wallet");
     const header = document.createElement("header");
-    const title = document.createElement("strong");
-    title.textContent = "Pilot";
     const origin = document.createElement("span");
     origin.textContent = this.origin;
     const close = document.createElement("button");
@@ -121,7 +125,7 @@ export class PilotWalletProvider {
     close.textContent = "Close";
     close.setAttribute("aria-label", "Close Pilot wallet");
     close.onclick = () => this.hide();
-    header.append(title, origin, close);
+    header.append(origin, close);
     this.frame = document.createElement("iframe");
     this.frame.title = "Pilot wallet account and permissions";
     this.frame.allow = `publickey-credentials-create ${this.origin}; publickey-credentials-get ${this.origin}`;

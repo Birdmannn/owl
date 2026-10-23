@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { PilotAccountMenu } from './PilotAccounts.js';
 import { PilotActivityLog } from './PilotActivityLog.js';
 import type { PilotActivity, OffchainManifest } from '@owl/pilot';
 
@@ -32,7 +31,6 @@ export function PilotOffchainModal({ visible, manifest, address, busy, error, on
       <button className="close" aria-label="Close off-chain permissions" disabled={busy} onClick={onClose}>×</button>
       <div className="pilot-modal-brand"><strong>Pilot <small>by Owl</small></strong><span>OFF-CHAIN</span></div>
       <h2 id="pilot-offchain-title">{approvedPermissions ? 'Your Pilot social profile' : 'Sign social actions on my behalf'}</h2>
-      <PilotAccountMenu busy={busy}/>
       <p>{manifest.name} · {manifest.audience}</p>
       <p className="fine">One wallet message approves only the selected actions for one hour. No CKB funding, transaction, or spending permission.</p>
       {address ? <><code style={{ overflowWrap: 'anywhere' }}>{address}</code>
