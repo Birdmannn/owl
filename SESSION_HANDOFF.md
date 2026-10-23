@@ -2,6 +2,10 @@
 
 Updated: 2026-10-21 (Africa/Lagos).
 
+## Deployment update: 2026-10-23
+
+Both passkey-wallet contracts are now deployed on CKB testnet in committed transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be` (passkey output 0, walletSession output 1). Live code cells and SDK hashes were verified via RPC. The user ran deployment after transferring 92,000 test CKB from the pool to the deployer. Earlier undeployed status below is historical. Next: push deployment records and source, host `apps/wallet` on a stable HTTPS origin, configure wallet/demo URLs and paymaster origin allowlist, redeploy backend/demo/docs, then run a real passkey funding/grant/action/recovery flow. Hardware-passkey end-to-end remains unverified.
+
 ## Latest update: independent passkey wallet implemented
 
 The user subsequently asked to implement and test Cartridge-like independent passkey ownership, isolated signing and on-chain restricted sessions. That implementation is now present **alongside** the earlier broad-key account API described below. Read `PILOT_WALLET.md` first; it contains the current architecture, Mermaid flow, integration sketch and operational limits. `CURRENT_IMPL.md` remains the record of the preceding broad-key version.

@@ -1,6 +1,6 @@
 # Pilot passkey wallet
 
-Implemented locally on 2026-10-21. This is a separate wallet architecture alongside the existing external-wallet and broad-key account APIs. It is a testnet preview; its two contracts are not deployed and a live hardware-passkey testnet flow is not yet verified.
+Implemented locally on 2026-10-21. This is a separate wallet architecture alongside the existing external-wallet and broad-key account APIs. It is a testnet preview; its two contracts are deployed on CKB testnet, with live code hashes verified on 2026-10-23. A live hardware-passkey testnet flow is not yet verified.
 
 ## Ownership and isolation
 
@@ -115,7 +115,7 @@ npm run dev --prefix apps/wallet
 
 Wallet development origin: `http://localhost:5176`; demo: `http://127.0.0.1:5174`; docs retain their existing port. Set `VITE_PILOT_WALLET_URL` in the demo to the wallet's exact URL. The wallet needs `VITE_PILOT_PAYMASTER_URL`; optionally `VITE_PILOT_WALLET_RPC` and `VITE_PILOT_WALLET_MAX_FEE`. The configured deployment pool must match. Add the **wallet origin** to the paymaster's browser-origin allowlist, because that origin submits sponsored requests. Apps communicate with the wallet; they do not receive a pool secret.
 
-`deployments/pilot-sponsored.json` has `passkey: null` and `walletSession: null`. After an explicit deployment decision, the prepared command is `npm run paymaster:deploy -- wallet`. It deploys these two new binaries, leaving `both` and `account` with their previous meanings. Code-cell capacity is separate from user budgets; review the displayed deployment cost first. No contract was deployed or pool funds spent as part of implementation.
+Both records in `deployments/pilot-sponsored.json` point to committed testnet transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be`: passkey output 0 and walletSession output 1. Their live code cells and hashes were verified on 2026-10-23. Publish these records with the wallet and backend builds. Code-cell capacity is separate from user budgets and ongoing fee sponsorship.
 
 For Vercel, add a third project rooted at `apps/wallet` using its `vercel.json`, with access to sources outside the root. Keep demo/backend and docs as their existing separate projects. Use a stable wallet domain before registering durable passkeys; passkeys are RP-bound and changing domains is not automatic migration. No database credentials or private keys belong in this static wallet project.
 
@@ -137,4 +137,4 @@ For Vercel, add a third project rooted at `apps/wallet` using its `vercel.json`,
 - Docs: 14 passed and production build passed.
 - Existing demo browser suite: 14 passed. New isolated wallet browser suite: 3 passed with Chromium virtual authenticators and real distinct localhost origins.
 - Production builds for wallet, demo, React package and docs are checked separately. Vite's existing bundle-size/dependency warnings do not indicate deployment.
-- No contracts deployed, no public pool/deployer funds spent, no local CKB node started. Live hardware-passkey/public-testnet verification remains an activation step.
+- Both new contract code cells are committed on public testnet and their live hashes were verified on 2026-10-23. This verifies deployment, not the browser end-to-end flow. Live hardware-passkey/public-testnet testing remains an activation step; no local CKB node was started.

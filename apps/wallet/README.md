@@ -10,6 +10,6 @@ npm run dev
 
 Open **http://localhost:5176**. Use localhost, not an IP address, for WebAuthn RP IDs. The integrating demo runs on its separate origin and opens this wallet as a popup. A stable HTTPS wallet domain is required for durable hosted credentials.
 
-Set `VITE_PILOT_PAYMASTER_URL` on this wallet and `VITE_PILOT_WALLET_URL` on integrating apps. The two new CKB deployments are currently unset; the UI permits passkey creation/authentication but blocks on-chain setup. No simulated on-chain success is displayed.
+Set `VITE_PILOT_PAYMASTER_URL` on this wallet and `VITE_PILOT_WALLET_URL` on integrating apps. Both passkey/session contracts are deployed on CKB testnet and their live code hashes were verified on 2026-10-23. Publish the current deployment records when building the wallet and backend. Funding still requires configured sponsorship and CKB at the passkey owner address. Live hardware-passkey end-to-end testing remains outstanding.
 
 Run `npm run build` and `npm test`. Browser tests use Chromium virtual authenticators. Root SDK and contract tests cover sponsored funding, grants, automatic actions, witness tampering, budget conservation, revocation and recovery. These do not replace live hardware-passkey testing or an independent audit.

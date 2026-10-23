@@ -1,6 +1,6 @@
 # Deploy Pilot on Vercel
 
-The repository can serve the demo and all three APIs from one Vercel project. The sponsored counter/delegation contracts have existing CKB testnet records in `deployments/pilot-sponsored.json`. The separate persistent-account and passkey-wallet contracts are not deployed yet.
+The repository can serve the demo and all three APIs from one Vercel project. The sponsored counter/delegation contracts have existing CKB testnet records in `deployments/pilot-sponsored.json`. The passkey-wallet contracts are also deployed on CKB testnet; the separate earlier persistent-account contract remains undeployed.
 
 ## Two Vercel projects from the same repository
 
