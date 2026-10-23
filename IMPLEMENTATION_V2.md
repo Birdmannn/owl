@@ -1,6 +1,6 @@
 # Pilot V2: developer projects and hosted SDK API
 
-**Status: proposal, not implemented.** This document specifies the next developer-facing layer. The APIs and SDK components below do not exist yet. It does not change the current integration or grant new signing authority.
+**Status: V2 roadmap, not implemented. Updated 2026-10-23.** The project/dashboard APIs, proposed `PilotProvider` and `createPilotClient`, hosted account discovery, and overlapping-session orchestration below remain proposals. The independent passkey wallet and its `PilotWalletProvider` already exist; they are the baseline, not proposed V2 APIs. This document does not grant new signing authority.
 
 ## Goal
 
@@ -10,14 +10,35 @@ An optional server secret authenticates privileged developer operations and auth
 
 ## What exists today
 
-- Existing-wallet connection, modal permission selection and session signing.
+- Existing-wallet connection, modal permission selection and compatible session signing; connection or permission checkboxes alone do not make an arbitrary owner-locked app automatically signable.
+- An independent Pilot wallet popup (`apps/wallet`) with native passkey creation/sign-in, multiple local accounts and switching, explicit app-origin/permission/budget review, logs, and owner recovery. JoyID is not required for this path.
+- `PilotWalletProvider` and `PilotHostedSigner`: apps receive public account data and request actions over an origin/Window/channel-bound transport; session keys stay on the separate trusted wallet origin, not in integrating apps. Owner private keys stay in the passkey authenticator.
+- Passkey and restricted-session contracts deployed on CKB testnet in transaction `0x2fc1cfa4046cdb186eb8ab7adc1cfe19ea3b116a7a5e3480530b73475b0a78be` (outputs 0 and 1), with live code hashes verified on 2026-10-23. A real hardware-passkey/browser end-to-end testnet flow remains unverified.
+- One active session per passkey account, with contract-enforced cell policies, cumulative CKB allowance and owner-authorized replacement/revocation/recovery. Replacement preserves the account address while a live authority exists; closing that authority requires a new account identity for later grants. Expiry remains a wallet/verifier check, not an on-chain upper timestamp limit.
 - Compatible CKB session/delegation policies, with separate deployed testnet sponsored variants.
 - Username registration with verified wallet ownership and shared storage.
 - Paymaster quote/submission validation, fee limits and durable transaction retries.
 - Off-chain owner grants, session-signed actions, receiving-app verification, replay protection and revocation.
 - Vercel-compatible request handlers and PostgreSQL storage; standalone services can use JSON locally.
 
-Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, overlapping sessions with deferred recovery, and `PilotProvider` are **new work proposed here**. The current React exports include `PilotModal` and `PilotAccountsProvider`; neither is the provider proposed below.
+Developer projects, dashboard authentication, project secrets, project-bound access tokens, project-specific sponsorship accounting, hosted cross-device account discovery/recovery metadata, overlapping sessions with deferred recovery, and `PilotProvider` are **new work proposed here**. Current React exports include `PilotModal` and `PilotAccountsProvider`; the core SDK also exports the implemented popup client `PilotWalletProvider`. None is the proposed project-aware React provider below. Local wallet labels are not globally registered Pilot usernames, and existing username records do not automatically discover or migrate passkey session accounts.
+
+The wallet is deployed once on a stable HTTPS origin and shared by integrating apps. The demo/backend and docs remain separate deployments. Browser origin allowlists are the current service configuration; project credentials and a dashboard do not exist yet. See [PILOT_WALLET.md](PILOT_WALLET.md) for the implemented protocol and limits.
+
+## Account creation, discovery and recovery to investigate
+
+**V2 research and design work, not implemented.** Users can already create another wallet directly in the popup, sign in and switch among accounts known to that wallet origin in the same browser. The missing feature is reliable account discovery and restoration on another browser/device, not wallet creation itself.
+
+Investigate these requirements before selecting a hosted directory protocol:
+
+- **Discoverable passkey sign-in:** evaluate a usernameless WebAuthn flow using discoverable credentials and an opaque user handle to find the right public record. Verify credential/RP/origin ownership with a fresh, purpose-bound server challenge before returning private metadata. A credential ID, public key, label or username supplied by a caller is not authentication. Retain an explicit public-descriptor import path.
+- **Owner-bound public directory:** associate verified owner credentials with network-specific owner addresses, session-account descriptors/TYPE_ID identities, account labels and archived/recoverable accounts. Decide how existing globally unique Pilot usernames bind to these identities without changing a username's recipient or treating a local label as a registered name. Multiple passkey accounts must remain distinct; account linking needs explicit proofs from the relevant owners.
+- **Passkey sync versus metadata sync:** synced passkeys do not sync account descriptors, browser journals or session keys. Discovering an account must work without exporting the passkey private key or uploading raw session private keys. Define behavior for synced credentials, hardware authenticators, credentials unavailable on the device, and unsupported browsers without promising universal sync.
+- **Receipts and device coordination:** restore exact signed/submitted transaction bytes and current chain state before replacement or recovery. A missing local journal or server record is not proof that nothing is pending. Investigate authenticated, privacy-preserving receipt backup and cross-device signing/settlement coordination; local Web Locks do not coordinate browsers/devices. Discovery must never resurrect a stale session or double-spend competing state.
+- **Recovery and continuity:** with an available original passkey and verified public descriptor, owner recovery already works without the old session key. V2 should make those accounts discoverable and recovery accessible after reconciliation. Losing every usable owner passkey is a separate unresolved recovery problem; metadata backup alone cannot restore signing authority. Additional credentials, owner rotation, social recovery and wallet-domain migration need explicit protocol/contract review before being advertised.
+- **Privacy and lifecycle:** prevent unauthenticated enumeration and unauthorized linking of a person's accounts across apps. Define metadata visibility, consent, retention/export/deletion, credential registration/linking/revocation, rate limits and audit events. The wallet stays a separate trusted signing origin; a directory service or developer project secret must not gain spending authority.
+
+Publish a threat model and a supported-browser/device test matrix before choosing an implementation. A changed wallet domain is a changed WebAuthn RP/origin binding; do not treat changing a URL as credential migration. No directory API or schema is finalized by this section.
 
 ## Credentials and authority
 
@@ -72,7 +93,8 @@ export function App() {
 `PilotProvider` would:
 
 - Load public project configuration from Pilot's hosted API; support an explicit `apiUrl` override for self-hosting and local testing.
-- Expose the existing wallet/account/modal integration through one project context.
+- Expose the hosted passkey wallet and supported existing-wallet/account/modal integrations through one project context, while preserving their distinct identity and authorization models.
+- Resolve the trusted wallet URL from reviewed configuration and keep passkey/session signing inside the wallet popup; the project-aware app provider must not import wallet-origin private keys.
 - Resolve username, social and paymaster service URLs automatically.
 - Check the configured network, manifest hash, supported contract deployments and current app origin.
 - Obtain/refresh scoped hosted API access when needed and attach project context to requests.
@@ -126,8 +148,8 @@ These versioned endpoints are additive. They do not rename or silently secure th
 | `POST /api/v2/projects/:projectId/tokens` | Scoped developer secret plus a valid owner/session challenge; issue backend-authorized access only within project policy |
 | `POST /api/v2/projects/:projectId/paymaster/quote` | Scoped access token, bound owner/session and allowed manifest/action; validate transaction and issue project-bound quote |
 | `POST /api/v2/projects/:projectId/paymaster/submit` | Same project/owner/session context; verify signatures, quote identity and budgets; commit exact bytes before broadcast |
-| `POST /api/v2/projects/:projectId/social/actions` | Scoped access plus the existing signed owner grant/action; verify registered audience/manifest and atomically accept/reject |
-| `POST /api/v2/projects/:projectId/social/revoke` | Verified owner revocation proof and appropriate access; revocation must remain available when sponsorship is disabled |
+| `POST /api/v2/projects/:projectId/social/actions` | Scoped access plus an explicitly versioned external-owner grant/action or passkey-wallet scoped message; verify its identity, live authority/revocation, audience/manifest and replay domain before atomically accepting/rejecting |
+| `POST /api/v2/projects/:projectId/social/revoke` | Protocol-specific verified revocation proof and appropriate access; distinguish off-chain revocation from passkey-authorized on-chain state revocation, and preserve recovery access when project sponsorship is disabled |
 | `GET /api/v2/projects/:projectId/usage` | Developer admin session or scoped reporting secret; project usage and public chain receipt references |
 | `GET /api/v2/projects/:projectId/logs` | Authorized project admin or owner-scoped access; redact credentials, session keys and sensitive payloads |
 | `POST /api/v2/developer/projects` | Authenticated dashboard admin; create an owned project |
@@ -168,7 +190,7 @@ An explicitly enabled public sponsorship mode may support frontend-only apps. It
 sequenceDiagram
     participant Dev as Developer dashboard
     participant App as App and Pilot SDK
-    participant Wallet as Owner wallet
+    participant Wallet as Pilot wallet popup or supported owner wallet
     participant Backend as Developer backend (optional)
     participant API as Hosted Pilot API
     participant DB as PostgreSQL
@@ -179,7 +201,8 @@ sequenceDiagram
     App->>API: Fetch config using public project ID
     API-->>App: Published manifest/hash and service configuration
     App->>Wallet: Review permissions and authorize session
-    Wallet-->>App: Explicit owner authorization
+    Wallet->>Chain: Confirm owner-authorized grant when required
+    Wallet-->>App: Public account and grant references, never private keys
     App->>API: Request one-time project/owner/session challenge
     opt Backend-authorized sponsorship
         App->>Backend: Request app access for challenge
@@ -190,20 +213,22 @@ sequenceDiagram
     App->>API: Quote transaction with project context and proofs
     API->>DB: Check project, owner, pool limits and quote identity
     API-->>App: Exact transaction quote
-    App->>App: Verify quote, sign allowed action and persist bytes
-    App->>API: Submit signed transaction and original quote
+    App->>Wallet: Request permitted action with stable request ID
+    Wallet->>Wallet: Verify quote, current authority and policy; sign and persist exact bytes
+    Wallet->>API: Submit signed transaction and original quote
     API->>Chain: Validate all scripts before exposing pool signature
     API->>DB: Atomically commit signed bytes, pool lease and accounting
     API->>Chain: Broadcast committed transaction bytes
-    API-->>App: Submitted transaction identity
-    Chain-->>App: Background chain confirmation
+    API-->>Wallet: Submitted transaction identity
+    Wallet-->>App: Public receipt and signing/settlement status
+    Chain-->>Wallet: Background chain confirmation
 ```
 
 The existing optimistic engine still accepts prepared actions locally and renders immediately. A project token, quote or balance check does not mean chain confirmation or reserve funds several moves into the future. Backend errors retain the saved action for reconciliation; a definitive failure follows the existing rollback rules. Requoting must never change an unresolved signed transaction's identity without proof that it cannot settle.
 
 ## Start another session while an older session settles
 
-**Proposed V2 behavior, not implemented in the current demo.** A user may explicitly authorize a new session without waiting for their previous session’s accepted actions to settle. Starting another session must not discard, overwrite, or recover the previous session’s cell or queue.
+**Proposed V2 behavior, not implemented.** The current passkey account has one active authority/key; replacement stops signing and settles saved receipts before rotating it. This section requires independent compatible account/state identities or a reviewed contract change; a new key alone cannot create two active sessions on the same singleton. Existing app ownership does not automatically move to a second account. A user may explicitly authorize a new session without waiting for their previous session’s accepted actions to settle. Starting another session must not discard, overwrite, or recover the previous session’s cell or queue.
 
 Each session has its own ID, session key, approved manifest and permission subset, budget, durable queue, settlement journal, and current cell outpoint. The new session needs an independent compatible app cell and sufficient wallet capacity. Never fund it from an older session’s unresolved cell, reuse an unresolved owner input, or spend the same app cell from two queues. If an app requires a single shared state cell, its compatible policy must support independent sessions or the new session must wait for that cell to become available; this feature cannot bypass application contract rules.
 
@@ -263,7 +288,7 @@ A developer's published manifest is configuration, not blanket user consent. Cha
 
 Project suspension or secret revocation blocks new hosted privileges and sponsorship according to policy. Existing short-lived tokens must be checked against current project/key status; expiry alone is insufficient for immediate suspension. Keep signed transaction recovery available under the original authority without creating a new spend.
 
-These controls do not revoke a copied on-chain session key. Existing contracts enforce their own lock arguments and rules; dashboard settings do not retroactively change them. Owner recovery remains the mechanism to revoke current on-chain delegation. Signed off-chain revocation follows its existing grant-specific verification path. Project authentication does not make arbitrary CKB contracts compatible with Pilot.
+These controls do not revoke a copied on-chain session key. Existing contracts enforce their own lock arguments and rules; dashboard settings do not retroactively change them. For the passkey wallet, owner-authorized on-chain state replacement or explicit revocation invalidates the old key; recovery can close the authority. Disconnect alone only stops this wallet instance and does not revoke a copied key. Earlier delegation protocols retain their own owner-recovery rules. Signed off-chain revocation follows its existing grant-specific verification path. Project authentication does not make arbitrary CKB contracts compatible with Pilot.
 
 ## Implementation order
 
@@ -271,14 +296,19 @@ These controls do not revoke a copied on-chain session key. Existing contracts e
 2. Add public configuration and project challenge/token endpoints with wallet/session binding, expiry and suspension checks.
 3. Add project-aware hosted API authorization and atomic project-plus-pool accounting. Keep existing SDK signature/quote checks.
 4. Add `createPilotClient` and `PilotProvider`, retaining current explicit integration as a supported path during migration.
-5. Add owner-bound multiple-session storage, selection, background reconciliation, session discovery, and deferred recovery controls; verify independent cell/input handling and aggregate sponsorship limits.
-6. Add dashboard creation/settings/usage/logs, then integrate the demo as a registered project.
-7. Update the web docs and installation examples only after these APIs are implemented and verified.
+5. Define the discovery/recovery threat model and supported device matrix; implement authenticated public metadata/receipt discovery, safe credential/account linking and cross-device coordination without uploading session private keys.
+6. Add owner-bound multiple-session storage, selection, background reconciliation, session discovery, and deferred recovery controls; verify independent cell/input handling, account-identity continuity limits and aggregate sponsorship limits.
+7. Add dashboard creation/settings/usage/logs, then integrate the demo as a registered project.
+8. Update README and web docs alongside each implemented change; keep proposal examples visibly separate from available APIs.
 
 During migration, protect the old unscoped sponsorship endpoints or disable them for the managed pool. They must not remain an alternate route around project limits. Unresolved old signed transactions require a documented recovery path; do not discard their journal entries. Moving endpoints must preserve username mappings, social replay/revocation state, pool leases and fee accounting.
 
 ## Acceptance criteria
 
+- A returning user on another supported browser/device can authenticate an available passkey and discover only their verified accounts, with network/identity bindings checked against chain state; credential IDs or names alone reveal no private directory records.
+- New wallet creation and account switching remain available in the shared popup; a local label is never silently promoted to a global username or used to retarget payments.
+- Restoring metadata neither exports owner/session private keys nor implies restored session signing; unavailable session keys lead to explicit replacement/recovery after uncertain transactions are reconciled.
+- Concurrent devices cannot use stale restored authority or missing local journals to bypass settlement and recovery checks. Loss of all owner credentials remains explicitly unsupported unless a separately reviewed recovery protocol is implemented.
 - A developer can create a project, publish its manifest, copy the public ID and connect an app without handling Pilot's database or pool secret.
 - The public ID appears safely in frontend assets; developer secrets and pool credentials do not.
 - A copied ID cannot manage a project or obtain backend-only sponsorship without the required proofs and developer authorization.

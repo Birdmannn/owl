@@ -53,16 +53,33 @@ function node<K extends keyof HTMLElementTagNameMap>(
   parent.append(e);
   return e;
 }
-node("small", "OWL / PILOT WALLET");
-node("h1", "Your account. Your permissions.");
-node(
-  "p",
-  "Use a Pilot passkey to own your account. Apps receive a connection, never your owner private key or session private keys.",
-);
-node(
-  "p",
-  "Testnet preview: session keys are stored on this wallet origin and remain accessible to its own scripts. Keep this origin trusted. Only one on-chain session is active per account.",
-).className = "warning";
+const header = node("header");
+header.className = "wallet-header";
+const brand = node("a", undefined, header);
+brand.className = "brand";
+brand.href = "#";
+brand.setAttribute("aria-label", "Pilot wallet home");
+const owl = node("img", undefined, brand);
+owl.src = "/owl.png";
+owl.alt = "";
+const wordmark = node("span", "pilot", brand);
+node("small", "BY OWL", wordmark);
+node("span", "CKB Testnet", header).className = "network";
+const intro = node("div");
+intro.className = "intro";
+node("span", "YOUR WALLET. YOUR CALL.", intro).className = "eyebrow";
+const heading = node("h1", "A little permission.", intro);
+node("span", "A lot less signing.", heading);
+node("p", "One passkey. Apps you trust. You decide what happens next.", intro);
+const trust = node("div");
+trust.className = "trust-strip";
+node("span", "Passkey protected", trust);
+node("span", "Permissions on-chain", trust);
+node("span", "You stay in control", trust);
+const preview = node("details");
+preview.className = "preview-note";
+node("summary", "Testnet preview · Know your wallet", preview);
+node("p", "Your owner private key stays in your passkey authenticator. Session keys are stored on this wallet origin and remain accessible to its own scripts. Keep this origin trusted. Only one on-chain session is active per account.", preview);
 const error = node("p");
 error.id = "error";
 error.setAttribute("role", "alert");
@@ -81,13 +98,21 @@ try {
 const opener = window.opener as Window | null;
 if (window.self !== window.top)
   throw new Error("Open Pilot as a top-level wallet popup");
-if (appOrigin) node("p", appOrigin).className = "origin";
+if (appOrigin) {
+  const requesting = node("div");
+  requesting.className = "requesting-origin";
+  node("small", "REQUESTING APP", requesting);
+  node("p", appOrigin, requesting).className = "origin";
+}
 const ready = !!config.passkey && !!config.walletSession && !!paymasterUrl;
 if (!ready)
   node(
     "p",
-    "On-chain sessions are unavailable until both new wallet locks are deployed and sponsorship is configured. You can create and authenticate a passkey now; no on-chain success is simulated.",
-  ).setAttribute("role", "status");
+    (config.passkey && config.walletSession
+      ? "Fee sponsorship is not configured for this wallet. "
+      : "On-chain sessions are unavailable until the wallet contracts and sponsorship are configured. ") +
+      "You can create and authenticate a passkey now; no on-chain success is simulated.",
+  ).className = "availability-note";
 const metaKey = "pilot:wallet:passkeys:v1";
 let passkeys: PilotPasskey[] = JSON.parse(
   localStorage.getItem(metaKey) ?? "[]",
@@ -100,8 +125,14 @@ let busy = false;
 let pendingConnect:
   { request: PilotWalletConnect; envelope: PilotWalletEnvelope } | undefined;
 let selectedPolicies: number[] = [];
-const accounts = node("section");
+const workspace = node("div");
+workspace.className = "workspace";
+const accounts = node("section", undefined, workspace);
+accounts.className = "account-card";
+accounts.id = "accounts";
+node("span", "01 / YOUR IDENTITY", accounts).className = "eyebrow";
 node("h2", "Pilot accounts", accounts);
+node("p", "Create a wallet or return with your passkey. No seed phrase to copy.", accounts).className = "section-description";
 const select = node("select", undefined, accounts);
 select.setAttribute("aria-label", "Pilot account");
 function renderAccounts() {
@@ -118,21 +149,25 @@ select.onchange = () => {
   connection = undefined;
   showOwner();
 };
-const ownerAddress = node("code", "", accounts);
+const addresses = node("div", undefined, accounts);
+addresses.className = "addresses";
+node("small", "OWNER FUNDING ADDRESS", addresses);
+const ownerAddress = node("code", "Select or create an account to see your funding address.", addresses);
 ownerAddress.id = "owner-address";
-const accountAddress = node("code", "", accounts);
+const accountAddress = node("code", "", addresses);
 const balances = node(
   "p",
   "Refresh balances after selecting an account.",
   accounts,
 );
+balances.className = "balance-note";
 function showOwner() {
   ownerAddress.textContent = selected
     ? ccc.Address.from({
         prefix: client.addressPrefix,
         script: pilotPasskeyLock(selected),
       }).toString()
-    : "";
+    : "Select or create an account to see your funding address.";
   const raw = selected ? localStorage.getItem(accountKey(selected)) : null;
   accountAddress.textContent = raw
     ? "Session account: " +
@@ -146,6 +181,7 @@ function showOwner() {
 }
 const label = node("label", "Account name", accounts);
 const name = node("input", undefined, label);
+name.placeholder = "e.g. My everyday wallet";
 name.setAttribute("aria-label", "Account name");
 name.maxLength = 64;
 name.autocomplete = "username webauthn";
@@ -175,7 +211,7 @@ async function run(fn: () => Promise<void>) {
     grant.disabled = !ready || !pendingConnect;
   }
 }
-button("Create Pilot passkey", async () => {
+const createPasskey = button("Create Pilot passkey", async () => {
   const p = await createPilotPasskey(name.value);
   if (passkeys.some((v) => v.publicKey === p.publicKey))
     throw new Error("Passkey already registered");
@@ -189,6 +225,7 @@ button("Create Pilot passkey", async () => {
   status.textContent =
     "Passkey created. Its owner private key remains in your authenticator.";
 });
+createPasskey.className = "primary";
 button("Sign in with passkey", async () => {
   if (!selected) throw new Error("Select an account first");
   await requestPilotAssertion(
@@ -209,6 +246,10 @@ button("Refresh balances", async () => {
     : 0n;
   balances.textContent = `Passkey owner: ${ccc.fixedPointToString(owner)} CKB. Session account: ${ccc.fixedPointToString(account)} CKB. State/asset occupied capacity is part of these balances.`;
 });
+const backup = node("details", undefined, accounts);
+backup.className = "backup-tools";
+node("summary", "Backup & restore", backup);
+node("p", "Export public account details for recovery on another browser. This file contains no private keys; keep access to your original passkey.", backup);
 button("Export public recovery data", async () => {
   if (!selected) throw new Error("Select an account");
   const publicAccount = localStorage.getItem(accountKey(selected));
@@ -231,8 +272,8 @@ button("Export public recovery data", async () => {
   a.download = "pilot-wallet-public-recovery.json";
   a.click();
   URL.revokeObjectURL(url);
-});
-const restoreLabel = node("label", "Import public recovery data", accounts);
+}, backup);
+const restoreLabel = node("label", "Import public recovery data", backup);
 const restore = node("input", undefined, restoreLabel);
 restore.type = "file";
 restore.accept = "application/json";
@@ -269,18 +310,29 @@ restore.onchange = () =>
     status.textContent =
       "Public descriptor restored. Sign in with its original passkey. This file contains no private keys.";
   });
-const review = node("section");
+const review = node("section", undefined, workspace);
+review.className = "approval-card";
+review.id = "permissions";
+node("span", "02 / YOU SET THE RULES", review).className = "eyebrow";
 node("h2", "App session approval", review);
 const appName = node("p", "No app is requesting a connection.", review);
+appName.className = "app-request";
 const policyList = node("div", undefined, review);
+policyList.className = "policy-list";
+const emptyPolicies = node("p", "Open Pilot from an app to review the actions it wants to perform. Nothing is approved by default.", policyList);
+emptyPolicies.className = "empty-state";
 const budgetLabel = node("label", "Maximum session spending (CKB)", review);
 const budget = node("input", undefined, budgetLabel);
+budget.placeholder = "Set your spending limit";
 budget.setAttribute("aria-label", "Maximum session spending (CKB)");
 budget.inputMode = "decimal";
+const policyHelp = node("details", undefined, review);
+policyHelp.className = "policy-help";
+node("summary", "How these permissions work", policyHelp);
 node(
   "p",
   "Cell policies constrain full lock/type/data hashes and capacity. A zero data hash permits arbitrary data. This is not a named-contract-method interpreter. Expiry is checked by the wallet; revocation and remaining budget are enforced on-chain.",
-  review,
+  policyHelp,
 );
 const grant = button(
   "Approve session with passkey",
@@ -414,7 +466,10 @@ const grant = button(
 grant.className = "primary";
 grant.disabled = true;
 const management = node("section");
+management.className = "management-card";
+node("span", "03 / ALWAYS YOURS", management).className = "eyebrow";
 node("h2", "Session and recovery", management);
+node("p", "Settle your queue, withdraw access or bring your CKB home. On-chain changes require your passkey.", management).className = "section-description";
 button(
   "Reconcile queued transactions",
   async () => {
@@ -485,8 +540,12 @@ button(
   management,
 );
 const logs = node("details");
+logs.className = "activity-card";
 node("summary", "Queue and all account receipts", logs);
 const logBody = node("pre", "No account selected.", logs);
+const footer = node("footer");
+node("span", "PILOT / BY OWL", footer);
+node("span", "Less signing. More doing.", footer);
 async function renderLogs(e = session) {
   if (e)
     logBody.textContent = JSON.stringify(
@@ -611,7 +670,9 @@ window.addEventListener("message", (event) => {
       budget.value = ccc.fixedPointToString(BigInt(v.budget));
       policyList.replaceChildren();
       v.policies.forEach((p, i) => {
-        const l = node("label", undefined, policyList),
+        const policy = node("div", undefined, policyList);
+        policy.className = "policy";
+        const l = node("label", undefined, policy),
           box = node("input", undefined, l);
         box.type = "checkbox";
         box.onchange = () => {
@@ -620,7 +681,9 @@ window.addEventListener("message", (event) => {
             : selectedPolicies.filter((n) => n !== i);
         };
         l.append(document.createTextNode(p.name));
-        node("pre", JSON.stringify(p, null, 2), policyList);
+        const technical = node("details", undefined, policy);
+        node("summary", "View policy details", technical);
+        node("pre", JSON.stringify(p, null, 2), technical);
       });
       grant.disabled = !ready;
     } catch (e) {
