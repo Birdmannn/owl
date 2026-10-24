@@ -138,10 +138,11 @@ export class PilotWalletProvider {
       dialog{box-sizing:border-box;width:min(510px,calc(100vw - 24px));height:var(--pilot-height,auto);min-height:0;max-width:none;max-height:70vh;padding:0;border:1px solid #496040;border-radius:16px;background:#192e23;color:#ecf0e5;overflow:hidden;box-shadow:0 24px 100px #0008}
       dialog[open]{display:flex;flex-direction:column}
       dialog::backdrop{background:#040d09b8;backdrop-filter:blur(5px)}
-      header{flex:0 0 48px;height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font:12px system-ui,sans-serif}
-      span{color:#b5c5ac;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 12px}
-      button{border:1px solid #53694d;background:#192e23;color:#ecf0e5;border-radius:6px;font:12px system-ui,sans-serif;padding:5px 10px;cursor:pointer}
+      header{flex:0 0 48px;height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 28px;font:12px system-ui,sans-serif}
+      span{color:#b5c5ac;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:12px}
+      button{box-sizing:border-box;display:grid;place-items:center;flex:0 0 26px;width:26px;height:26px;border:0;background:transparent;color:#ecf0e5;border-radius:6px;padding:0;cursor:pointer}
       button:focus-visible{outline:2px solid #c7f881;outline-offset:3px}
+      @media(max-width:396px){header{padding:0 20px}}
       iframe{display:block;flex:1 1 auto;min-height:0;border:0;width:100%;height:150px;background:#192e23}
       @media(prefers-reduced-motion:reduce){dialog::backdrop{backdrop-filter:none}}
     `;
@@ -152,7 +153,19 @@ export class PilotWalletProvider {
     origin.textContent = this.origin;
     const close = document.createElement("button");
     close.type = "button";
-    close.textContent = "Close";
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("width", "18");
+    icon.setAttribute("height", "18");
+    icon.setAttribute("aria-hidden", "true");
+    const cross = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    cross.setAttribute("d", "M6 6l12 12M18 6L6 18");
+    cross.setAttribute("fill", "none");
+    cross.setAttribute("stroke", "currentColor");
+    cross.setAttribute("stroke-width", "1.8");
+    cross.setAttribute("stroke-linecap", "round");
+    icon.append(cross);
+    close.append(icon);
     close.setAttribute("aria-label", "Close Pilot wallet");
     close.onclick = () => this.hide();
     header.append(origin, close);

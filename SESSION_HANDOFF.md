@@ -1,3 +1,7 @@
+## Modal close icon (2026-10-24)
+
+Replaced hosted SDK modal Close text button with an SVG cross (not a text x), borderless transparent 26px square preserving prior button height. Accessible name remains Close Pilot wallet; focus outline and hide/cancel semantics unchanged. Header uses wallet content shell padding 28px, 20px for narrow viewport matching embedded main. README and web docs updated. Integrating apps must rebuild/update SDK to receive header changes; no contract changes.
+
 ## Verified live funding and clipboard fix (2026-10-24)
 
 User supplied session address; read-only public testnet RPC confirmed exact-lock total 1963 CKB and ordinary-cell total 0. Initial committed grant 0x06726605f244584e3e00a047ea115f6606d88110a4b43e9c25477951f18904a7 consumes owner 100000 CKB, creates authority 1963 CKB (1763 occupied + 200 spending amount), returns owner 98037 CKB. Sponsor separately pays network fee. Latest committed replacement 0x8e64a03e7ee7b89365ed74790e745ddf764962e637b84942a5cdac4bcc8fc56f keeps same capacity, remaining allowance 200 CKB, sequence 1, 11 policies. Thus actual chain allowance is 200, not any larger UI maximum. No chain mutation performed.
