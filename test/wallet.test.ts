@@ -882,3 +882,29 @@ test("initial funding selects its exact TYPE_ID seed despite owner-cell indexer 
   assert.equal(ccc.hashCkb(tx.inputs[0]!.toBytes(), new Uint8Array(8)), ccc.Script.from(f.account.stateType).args);
   assert.equal(f.signs, 1);
 });
+
+test("replacement grant calculates its sequence after pending actions settle and preserves the reviewed proposal", async (t) => {
+  const f = await fixture(t);
+  await f.session.sendTransaction(await f.payment(), "pending-before-regrant");
+  const proposal = { ...f.state, sequence: "1", remaining: ccc.fixedPointFrom(100).toString() };
+  assert.equal(f.journal.state!.sequence, "0");
+  await f.session.grant(proposal);
+  assert.equal(f.journal.state!.sequence, "2");
+  assert.equal(f.journal.state!.remaining, proposal.remaining);
+  assert.deepEqual(f.journal.state!.policies, proposal.policies);
+  assert.equal(proposal.sequence, "1", "caller proposal is not mutated");
+  const tx = ccc.Transaction.fromBytes(f.journal.receipts.at(-1)!.bytes);
+  assert.equal(tx.outputsData[0], encodePilotWalletState(f.journal.state!));
+});
+
+test("owner replacement uses the live authority sequence when local state is missing", async (t) => {
+  const f = await fixture(t);
+  await f.session.sendTransaction(await f.payment(), "before-metadata-loss");
+  await f.session.resume();
+  const j = await f.options.journal.load();
+  delete j!.state;
+  await f.options.journal.save(j!);
+  await f.session.grant({ ...f.state, sequence: "0" });
+  assert.equal(f.journal.state!.sequence, "2");
+  assert.equal(f.journal.state!.remaining, f.state.remaining);
+});

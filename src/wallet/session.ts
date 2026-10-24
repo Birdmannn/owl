@@ -785,6 +785,8 @@ export class PilotWalletSession extends ccc.Signer {
   }
   /** Owner confirms an on-chain grant. The initial transaction anchors the account with TYPE_ID. */
   async grant(state: PilotWalletState, capacity?: bigint): Promise<ccc.Hex> {
+    // Snapshot reviewed permissions/budget; sequencing is wallet-managed after settlement.
+    state = structuredClone(state);
     return this.ownerOperation(
       "grant",
       async () => {
@@ -795,6 +797,18 @@ export class PilotWalletSession extends ccc.Signer {
         )
           throw new Error("Grant does not match the selected app/key");
         const anchor = await this.anchor();
+        if (anchor && anchor.outputData !== "0x") {
+          const bytes = ccc.bytesFrom(anchor.outputData);
+          if (bytes.length < 83 || bytes[0] !== 1 || bytes[82]! < 1 ||
+              bytes[82]! > MAX_DELEGATED_ACTIONS || bytes.length !== 83 + bytes[82]! * 105)
+            throw new Error("Invalid live session authority; reconcile before replacing the grant");
+          const sequence = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(42, true);
+          state.sequence = (sequence + 1n).toString();
+        } else {
+          // A revoked authority has no encoded counter; retained history is a local continuity hint.
+          const previous = anchor ? (await this.journal()).state?.sequence : undefined;
+          state.sequence = previous === undefined ? "0" : (BigInt(previous) + 1n).toString();
+        }
         const data = encodePilotWalletState(state);
         let tx: ccc.Transaction;
         if (anchor) {
@@ -814,11 +828,7 @@ export class PilotWalletSession extends ccc.Signer {
             outputs: [anchor.cellOutput],
             outputsData: [data],
           });
-          if (
-            BigInt(state.sequence) !==
-            BigInt((await this.journal()).state?.sequence ?? "0") + 1n
-          )
-            throw new Error("Grant sequence must advance");
+
         } else {
           const history = await this.journal();
           if (history.state || history.receipts.some(r => r.kind === "grant" && r.status !== "requote"))

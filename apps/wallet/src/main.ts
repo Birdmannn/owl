@@ -1,3 +1,4 @@
+import { formatPilotError } from "../../../src/errors";
 import "./style.css";
 import { MAX_DELEGATED_ACTIONS } from '../../../src/limits';
 import { validatePilotPolicyCatalog } from '../../../src/wallet/session';
@@ -107,7 +108,7 @@ try {
   if (params.has("appOrigin"))
     appOrigin = canonicalWalletOrigin(params.get("appOrigin")!);
 } catch {
-  error.textContent = "Invalid requesting app origin";
+  error.textContent = formatPilotError("Invalid requesting app origin");
 }
 const embedded = window.self !== window.top;
 if (embedded && window.parent !== window.top)
@@ -335,7 +336,7 @@ async function run(fn: () => Promise<void>) {
     notifyProgress("processing");
     await fn();
   } catch (e) {
-    error.textContent = e instanceof Error ? e.message : String(e);
+    error.textContent = formatPilotError(e);
   } finally {
     if (pendingConnect) notifyProgress("waiting-for-user");
     busy = false;
@@ -641,7 +642,8 @@ const grant = button(
         const state: PilotWalletState = {
           publicKey,
           remaining: amount.toString(),
-          sequence: (BigInt(journal?.state?.sequence ?? "-1") + 1n).toString(),
+          // grant() derives the actual sequence from the live authority after settlement.
+          sequence: "0",
           appOrigin,
           policies: approved,
         };
@@ -973,7 +975,7 @@ function reply(
       channel,
       id: request.id,
       method: request.method,
-      ...(failure ? { error: failure } : { result }),
+      ...(failure ? { error: formatPilotError(failure) } : { result }),
     },
     appOrigin,
   );

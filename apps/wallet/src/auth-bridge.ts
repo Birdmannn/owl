@@ -1,3 +1,4 @@
+import { formatPilotError } from "../../../src/errors";
 import { ccc } from '@ckb-ccc/core';
 import { parsePilotPasskey, verifyPilotAssertion, type PilotPasskey, type PilotAssertion } from '../../../src/wallet/passkey';
 export const AUTH_PROTOCOL = 'owl-pilot-top-auth-v1';
@@ -51,7 +52,7 @@ export function topLevelAuth(request: AuthRequest): Promise<PilotPasskey | Pilot
       if (popup && !popup.closed) { popup.focus(); return; }
       // Run directly from this click: owner transaction preparation may have awaited RPC calls.
       popup = window.open(new URL('/auth.html#' + token, location.origin), '_blank', 'popup,width=480,height=620');
-      if (!popup) { text.textContent = 'Safari blocked the Pilot window. Allow popups for this site and try Continue again.'; return; }
+      if (!popup) { text.textContent = formatPilotError('Safari blocked the Pilot window. Allow popups for this site and try Continue again.'); return; }
       proceed.textContent = 'Focus Pilot authentication';
       interval = setInterval(() => { if (popup?.closed) finish(new Error('Pilot authentication window closed')); }, 500);
       timer = setTimeout(() => finish(new Error('Pilot authentication timed out')), 180_000);

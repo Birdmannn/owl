@@ -1,3 +1,4 @@
+import { formatPilotError } from "../../../src/errors";
 import { useEffect, useRef, useState } from "react";
 import { ccc } from "@ckb-ccc/core";
 import {
@@ -28,7 +29,7 @@ export function HostedWallet() {
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatPilotError(e));
     } finally {
       setBusy(false);
     }

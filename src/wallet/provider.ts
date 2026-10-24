@@ -1,3 +1,4 @@
+import { PilotError, formatPilotError } from "../errors.js";
 import { ccc } from "@ckb-ccc/core";
 import { canonicalWalletOrigin } from "./passkey.js";
 import {
@@ -69,10 +70,10 @@ export class PilotWalletProvider {
     const url = new URL(options.url);
     this.origin = canonicalWalletOrigin(url.origin);
     if (url.username || url.password || url.hash)
-      throw new Error("Invalid wallet URL");
+      throw new PilotError("Invalid wallet URL");
     // Require a direct top-level app. Nested ancestors complicate WebAuthn topOrigin binding.
     if (window.self !== window.top)
-      throw new Error("Open the integrating app as a top-level page");
+      throw new PilotError("Open the integrating app as a top-level page");
     window.addEventListener("message", this.receive);
   }
   private receive = (event: MessageEvent) => {
@@ -123,7 +124,7 @@ export class PilotWalletProvider {
     }
     this.pending.delete(v.id);
     clearTimeout(p.timer);
-    if (v.error) p.reject(new Error(v.error));
+    if (v.error) p.reject(new PilotError(v.error));
     else p.resolve(v.result);
   };
   private mount(url: URL) {
@@ -169,7 +170,7 @@ export class PilotWalletProvider {
   /** Reopen the connected wallet for accounts, permissions, balances, logs and recovery. */
   open() {
     if (this.disposed || !this.dialog || !this.host?.isConnected)
-      throw new Error("Connect Pilot before opening the wallet");
+      throw new PilotError("Connect Pilot before opening the wallet");
     if (!this.dialog.open) this.dialog.showModal();
   }
   /** Hide the presentation only. Keep the isolated signer alive; this does not disconnect. */
@@ -181,62 +182,66 @@ export class PilotWalletProvider {
     this.dialog?.close();
   }
   async connect(request: PilotWalletConnect): Promise<PilotWalletConnection> {
-    if (this.disposed) throw new Error("Provider disposed");
-    validatePilotPolicyCatalog(request.policies);
-    if (
-      !request.name ||
-      request.name.length > 100 ||
-      BigInt(request.budget) <= 0n
-    )
-      throw new Error("Choose an app name and positive spending budget");
-    if (this.frame) {
-      this.open();
-      throw new Error(
-        "Pilot is already open; finish or disconnect the existing connection before reconnecting",
-      );
-    }
-    this.channel = crypto.randomUUID();
-    const url = new URL(this.options.url);
-    url.searchParams.set("appOrigin", location.origin);
-    url.searchParams.set("channel", this.channel);
-    url.searchParams.set("embed", "1");
-    url.searchParams.set("progress", "1");
-    const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.ready = undefined;
-        reject(
-          new Error(
-            "Pilot wallet could not load. Check wallet URL, frame-src and framing permissions.",
-          ),
+    try {
+      if (this.disposed) throw new PilotError("Provider disposed");
+      validatePilotPolicyCatalog(request.policies);
+      if (
+        !request.name ||
+        request.name.length > 100 ||
+        BigInt(request.budget) <= 0n
+      )
+        throw new PilotError("Choose an app name and positive spending budget");
+      if (this.frame) {
+        this.open();
+        throw new PilotError(
+          "Pilot is already open; finish or disconnect the existing connection before reconnecting",
         );
-      }, this.options.timeoutMs ?? 300_000);
-      this.cancelReady = () => {
-        clearTimeout(timer);
-        reject(new Error("Provider disposed"));
-      };
-      this.ready = () => {
-        clearTimeout(timer);
-        this.ready = undefined;
-        this.cancelReady = undefined;
-        resolve();
-      };
-    });
-    this.mount(url);
-    await ready;
-    const connection = (await this.request(
-      "connect",
-      request,
-    )) as PilotWalletConnection;
-    if (
-      !connection ||
-      typeof connection !== "object" ||
-      connection.appOrigin !== location.origin ||
-      connection.expiresAt <= Date.now()
-    )
-      throw new Error("Wallet returned an invalid session");
-    this.connection = connection;
-    this.hide();
-    return connection;
+      }
+      this.channel = crypto.randomUUID();
+      const url = new URL(this.options.url);
+      url.searchParams.set("appOrigin", location.origin);
+      url.searchParams.set("channel", this.channel);
+      url.searchParams.set("embed", "1");
+      url.searchParams.set("progress", "1");
+      const ready = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.ready = undefined;
+          reject(
+            new PilotError(
+              "Pilot wallet could not load. Check wallet URL, frame-src and framing permissions.",
+            ),
+          );
+        }, this.options.timeoutMs ?? 300_000);
+        this.cancelReady = () => {
+          clearTimeout(timer);
+          reject(new PilotError("Provider disposed"));
+        };
+        this.ready = () => {
+          clearTimeout(timer);
+          this.ready = undefined;
+          this.cancelReady = undefined;
+          resolve();
+        };
+      });
+      this.mount(url);
+      await ready;
+      const connection = (await this.request(
+        "connect",
+        request,
+      )) as PilotWalletConnection;
+      if (
+        !connection ||
+        typeof connection !== "object" ||
+        connection.appOrigin !== location.origin ||
+        connection.expiresAt <= Date.now()
+      )
+        throw new PilotError("Wallet returned an invalid session");
+      this.connection = connection;
+      this.hide();
+      return connection;
+    } catch (error) {
+      throw error instanceof PilotError ? error : new PilotError(formatPilotError(error));
+    }
   }
   async request(
     method:
@@ -250,7 +255,7 @@ export class PilotWalletProvider {
     params?: unknown,
   ): Promise<unknown> {
     if (this.disposed || !this.frame?.contentWindow || !this.host?.isConnected)
-      throw new Error("Connect Pilot first");
+      throw new PilotError("Connect Pilot first");
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, method });
@@ -282,7 +287,7 @@ export class PilotWalletProvider {
           : pending.method === "connect"
             ? "Wallet connection processing timed out; reopen Pilot and reconcile any saved funding transaction before trying again"
             : "Wallet request timed out while processing; check the connection and reconcile any saved transactions before trying again";
-      pending.reject(new Error(message));
+      pending.reject(new PilotError(message));
     }, this.options.timeoutMs ?? 300_000);
   }
   async disconnect() {
@@ -290,7 +295,7 @@ export class PilotWalletProvider {
     if (this.connection) await this.request("disconnect");
     else if (this.pending.size || this.ready) {
       this.open();
-      throw new Error(
+      throw new PilotError(
         "Finish the pending wallet operation before disconnecting",
       );
     }
@@ -322,7 +327,7 @@ export class PilotWalletProvider {
     this.ready = undefined;
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
-      p.reject(new Error("Provider disposed"));
+      p.reject(new PilotError("Provider disposed"));
     }
     this.pending.clear();
     // Local teardown only. Saved signed transactions still require reconciliation.
@@ -345,7 +350,7 @@ export class PilotHostedSigner extends ccc.Signer {
   }
   async connect() {
     if (!this.provider.connected)
-      throw new Error("Call provider.connect with app policies first");
+      throw new PilotError("Call provider.connect with app policies first");
   }
   async disconnect() {
     await this.provider.disconnect();
@@ -361,11 +366,11 @@ export class PilotHostedSigner extends ccc.Signer {
   }
   async getAddressObjs() {
     const a = this.provider.account;
-    if (!a) throw new Error("Pilot is disconnected");
+    if (!a) throw new PilotError("Pilot is disconnected");
     return [await ccc.Address.fromString(a.address, this.client)];
   }
   async signMessageRaw(): Promise<string> {
-    throw new Error(
+    throw new PilotError(
       "Use provider.request(signMessage) for a scoped Pilot authorization",
     );
   }
@@ -376,7 +381,7 @@ export class PilotHostedSigner extends ccc.Signer {
     return ccc.Transaction.fromBytes(bytes);
   }
   async signOnlyTransaction(): Promise<ccc.Transaction> {
-    throw new Error(
+    throw new PilotError(
       "Pilot signatures remain inside the wallet; use sendTransaction",
     );
   }
@@ -385,7 +390,7 @@ export class PilotHostedSigner extends ccc.Signer {
     requestId?: string,
   ): Promise<ccc.Hex> {
     if (!requestId)
-      throw new Error("Provide a stable request ID for wallet submission");
+      throw new PilotError("Provide a stable request ID for wallet submission");
     return (await this.provider.request("send", {
       bytes: ccc.hexFrom(ccc.Transaction.from(value).toBytes()),
       requestId,

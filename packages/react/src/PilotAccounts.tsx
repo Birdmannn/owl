@@ -1,3 +1,4 @@
+import { formatPilotError } from '@owl/pilot';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { assertPilotAccount, pilotAccountFromSigner, readPilotAccounts, rememberPilotAccount, type PilotAccount } from '@owl/pilot';
 import { ccc } from '@ckb-ccc/core';
@@ -126,6 +127,6 @@ export function PilotAccountMenu({ busy = false }: { busy?: boolean }) {
     </div>}
     {accounts.blocked && <p className="fine">Finish wallet operations and settle queued work before switching accounts.</p>}
     {accounts.switching && <p role="status" className="fine">Choose the requested account in your wallet…</p>}
-    {accounts.error && <p className="pilot-modal-error" role="status">{accounts.error}</p>}
+    {accounts.error && <p className="pilot-modal-error" role="status">{formatPilotError(accounts.error)}</p>}
   </div>;
 }

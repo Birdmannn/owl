@@ -344,7 +344,7 @@ test("confirmed connection hides the modal without unloading the signer; failed 
     }
   });
   expect(failed).toEqual({
-    error: "Unresolved signed transaction",
+    error: "Pilot says: Unresolved signed transaction",
     connected: true,
   });
   expect(page.frames()).toContain(frame);

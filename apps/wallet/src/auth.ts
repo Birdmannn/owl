@@ -1,3 +1,4 @@
+import { formatPilotError } from "../../../src/errors";
 import './style.css';
 import { createPilotPasskey, requestPilotAssertion, parsePilotPasskey, canonicalWalletOrigin } from '../../../src/wallet/passkey';
 import { AUTH_PROTOCOL, type AuthRequest } from './auth-bridge';
@@ -32,7 +33,7 @@ if (window.self !== window.top || !peer || !/^[a-f0-9-]{36}$/.test(token)) {
       } else throw new Error('Unsupported authentication request');
       origin.textContent = 'Requesting app: ' + value.appOrigin;
       request = value; approve.disabled = false;
-    } catch (e) { status.textContent = String(e); }
+    } catch (e) { status.textContent = formatPilotError(e); }
   });
   peer.postMessage({ protocol: AUTH_PROTOCOL, token, method: 'ready' }, location.origin);
 }
@@ -44,7 +45,7 @@ approve.onclick = async () => {
     peer.postMessage({ protocol: AUTH_PROTOCOL, token, method: 'result', result }, location.origin);
     status.textContent = 'Complete. Return to the Pilot modal.';
   } catch (e) {
-    status.textContent = e instanceof Error ? e.message : String(e);
+    status.textContent = formatPilotError(e);
     approve.disabled = false;
   }
 };

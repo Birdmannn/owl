@@ -1,3 +1,4 @@
+import { formatPilotError } from '@owl/pilot';
 import { useEffect, useRef, useState } from 'react';
 import { PilotActivityLog } from './PilotActivityLog.js';
 import type { PilotActivity, OffchainManifest } from '@owl/pilot';
@@ -47,7 +48,7 @@ export function PilotOffchainModal({ visible, manifest, address, busy, error, on
       </> : <button className="primary full" onClick={onConnectOwner}>Connect owner wallet for social demo</button>}
       {address && <PilotActivityLog address={address} activity={activity}/>}
       <p className="fine">The receiving app verifies the owner delegation and each session signature. Disconnecting alone does not revoke a grant; use Revoke social session.</p>
-      {(localError || error) && <p role="status">{localError || error}</p>}{busy && <p role="status">Waiting for approval…</p>}
+      {(localError || error) && <p role="status">{formatPilotError(localError || error)}</p>}{busy && <p role="status">Waiting for approval…</p>}
     </section>
   </div>;
 }
