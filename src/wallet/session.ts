@@ -378,23 +378,25 @@ export async function buildPilotWalletTransaction(
   state: PilotWalletState,
   value: ccc.TransactionLike,
   allowOwnerReview = false,
+  knownAnchor?: ccc.Cell,
 ): Promise<ccc.Transaction> {
   const tx = ccc.Transaction.from(value).clone(),
     lock = pilotWalletLock(account),
     type = ccc.Script.from(account.stateType);
   if (tx.outputs.some((o) => o.type?.eq(type)))
     throw new Error("The wallet builds its own session successor");
-  let anchor: ccc.Cell | undefined;
+  let anchor: ccc.Cell | undefined = knownAnchor;
   const ordinary: ccc.Cell[] = [];
   for await (const cell of client.findCellsByLock(lock, null)) {
     if (!(await client.getCellLive(cell.outPoint, true))) continue;
     if (cell.cellOutput.type?.eq(type)) {
-      if (anchor) throw new Error("Duplicate authority");
+      if (anchor && !anchor.outPoint.eq(cell.outPoint)) throw new Error("Duplicate authority");
       anchor = cell;
     } else if (!cell.cellOutput.type && cell.outputData === "0x")
       ordinary.push(cell);
   }
-  if (!anchor || anchor.outputData !== encodePilotWalletState(state))
+  if (!anchor || !anchor.cellOutput.lock.eq(lock) || !anchor.cellOutput.type?.eq(type) ||
+      !(await client.getCellLive(anchor.outPoint, true)) || anchor.outputData !== encodePilotWalletState(state))
     throw new Error("Session authority changed; reconnect and reconcile");
   if (!tx.inputs.some((i) => i.previousOutput.eq(anchor!.outPoint))) {
     for (let i = tx.witnesses.length; i < tx.inputs.length; i++)
@@ -559,6 +561,23 @@ export class PilotWalletSession extends ccc.Signer {
       await this.resumeUnlocked();
     });
   }
+  /** Explicitly resume a locally retained grant after passkey sign-in, without replacing it. */
+  async resumeAppAccess(): Promise<PilotWalletState> {
+    return this.options.exclusive(async () => {
+      await this.verify();
+      await this.resumeUnlocked();
+      const j = await this.journal();
+      if (!j.state || j.state.appOrigin !== this.options.appOrigin ||
+          j.state.publicKey !== this.publicKey || this.options.expiresAt <= Date.now())
+        throw new Error("Saved session expired, was replaced, or belongs to another app/key");
+      const anchor = await this.anchor();
+      if (!anchor || anchor.outputData !== encodePilotWalletState(j.state))
+        throw new Error("Saved session authority is unavailable, revoked or changed; reconcile before reconnecting");
+      j.stopped = false;
+      await this.options.journal.save(j);
+      return j.state;
+    });
+  }
   async prepareAppTransaction(
     value: ccc.TransactionLike,
   ): Promise<ccc.Transaction> {
@@ -579,6 +598,7 @@ export class PilotWalletSession extends ccc.Signer {
         j.state,
         value,
         !!this.options.approveOnce,
+        await this.anchor(),
       );
       return this.prepareTransaction(tx);
     });
@@ -800,6 +820,9 @@ export class PilotWalletSession extends ccc.Signer {
           )
             throw new Error("Grant sequence must advance");
         } else {
+          const history = await this.journal();
+          if (history.state || history.receipts.some(r => r.kind === "grant" && r.status !== "requote"))
+            throw new Error("Existing account authority is unavailable or closed; reconcile or recover it instead of funding it again");
           if (!capacity)
             throw new Error("Initial grant needs a funding capacity");
           tx = ccc.Transaction.from({
@@ -820,7 +843,7 @@ export class PilotWalletSession extends ccc.Signer {
           )
             throw new Error("Budget plus state cell capacity is required");
         }
-        await this.ownerProof(tx);
+        await this.ownerProof(tx, !anchor ? ccc.Script.from(this.options.account.stateType).args : undefined);
         if (
           !anchor &&
           ccc.hashCkb(tx.inputs[0]!.toBytes(), walletU64(0n)) !==
@@ -947,6 +970,18 @@ export class PilotWalletSession extends ccc.Signer {
     });
   }
   private async anchor(): Promise<ccc.Cell | undefined> {
+    // A confirmed transaction can be ahead of the indexer after disconnect/reload.
+    const journal = await this.options.journal.load();
+    for (const receipt of [...(journal?.receipts ?? [])].reverse()) {
+      if (ccc.Transaction.fromBytes(receipt.bytes).hash() !== receipt.hash)
+        throw new Error("Corrupt wallet receipt");
+      const tx = ccc.Transaction.fromBytes(receipt.bytes);
+      for (const [index, output] of tx.outputs.entries()) {
+        if (!output.lock.eq(this.lock) || !output.type?.eq(this.options.account.stateType)) continue;
+        const cell = await this.client.getCellLive({txHash: receipt.hash, index}, true);
+        if (cell?.cellOutput.lock.eq(this.lock) && cell.cellOutput.type?.eq(this.options.account.stateType)) return cell;
+      }
+    }
     for await (const cell of this.client.findCellsByLock(this.lock, null))
       if (
         cell.cellOutput.type?.eq(this.options.account.stateType) &&
@@ -955,7 +990,7 @@ export class PilotWalletSession extends ccc.Signer {
         return cell;
     return undefined;
   }
-  private async ownerProof(tx: ccc.Transaction) {
+  private async ownerProof(tx: ccc.Transaction, initialTypeId?: ccc.Hex) {
     let proof: ccc.Cell | undefined;
     for await (const cell of this.client.findCellsByLock(
       this.options.account.ownerLock,
@@ -964,6 +999,7 @@ export class PilotWalletSession extends ccc.Signer {
       if (
         !cell.cellOutput.type &&
         cell.outputData === "0x" &&
+        (!initialTypeId || ccc.hashCkb(ccc.CellInput.from({ previousOutput: cell.outPoint }).toBytes(), walletU64(0n)) === initialTypeId) &&
         (await this.client.getCellLive(cell.outPoint, true))
       ) {
         proof = cell;
@@ -971,6 +1007,7 @@ export class PilotWalletSession extends ccc.Signer {
       }
     if (!proof)
       throw new Error(
+        initialTypeId ? "The unfunded account seed is no longer live; prepare a replacement unfunded descriptor" :
         "Fund the passkey owner address first; an ordinary owner proof cell is required",
       );
     const already = tx.inputs.some((i) => i.previousOutput.eq(proof!.outPoint));

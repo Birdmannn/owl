@@ -31,6 +31,7 @@ import {
   type PilotWalletDescriptor,
   type PilotWalletJournal,
   type PilotWalletState,
+  type PilotCellPolicy,
 } from "../../../src/wallet/session";
 import {
   PILOT_PASSKEY_CODE_HASH,
@@ -124,13 +125,22 @@ if (embedded) {
     preview,
   ).className = "storage-note";
 }
-const assertOwner = (passkey: PilotPasskey, challenge: ccc.Hex) =>
-  embedded && needsSafariAuth()
-    ? topLevelAuth({ kind: "assert", passkey, challenge, appOrigin }) as Promise<PilotAssertion>
-    : requestPilotAssertion(passkey, challenge, embedded ? appOrigin : undefined);
 let cancelOwnerReview: (() => void) | undefined;
 let activeRequestId: string | undefined;
+function notifyProgress(phase: "waiting-for-user" | "processing") {
+  const id = activeRequestId ?? pendingConnect?.envelope.id;
+  if (peer && id) peer.postMessage({ protocol: PILOT_WALLET_PROTOCOL, channel, id, method: "progress", params: {phase} }, appOrigin);
+}
+async function assertOwner(passkey: PilotPasskey, challenge: ccc.Hex): Promise<PilotAssertion> {
+  notifyProgress("waiting-for-user");
+  try {
+    return embedded && needsSafariAuth()
+      ? await topLevelAuth({ kind: "assert", passkey, challenge, appOrigin }) as PilotAssertion
+      : await requestPilotAssertion(passkey, challenge, embedded ? appOrigin : undefined);
+  } finally { notifyProgress("processing"); }
+}
 async function confirmReview(message: string): Promise<boolean> {
+  notifyProgress("waiting-for-user");
   const dialog = node("dialog");
   dialog.className = "owner-review";
   const title = node("h2", "Review and confirm", dialog);
@@ -140,6 +150,7 @@ async function confirmReview(message: string): Promise<boolean> {
   return new Promise((resolve) => {
     const finish = (approved: boolean) => {
       cancelOwnerReview = undefined;
+      notifyProgress("processing");
       dialog.close();
       dialog.remove();
       resolve(approved);
@@ -248,6 +259,8 @@ renderAccounts();
 select.onchange = () => {
   selected = passkeys.find((p) => p.credentialId === select.value);
   authenticated = false;
+  resumable = undefined;
+  continueSession.hidden = true;
   session = undefined;
   connection = undefined;
   showOwner();
@@ -317,10 +330,12 @@ async function run(fn: () => Promise<void>) {
       throw new Error(
         "Embedded wallet storage is blocked by your browser. Enable storage for the Pilot wallet before creating an account.",
       );
+    notifyProgress("processing");
     await fn();
   } catch (e) {
     error.textContent = e instanceof Error ? e.message : String(e);
   } finally {
+    if (pendingConnect) notifyProgress("waiting-for-user");
     busy = false;
     for (const b of root.querySelectorAll<
       HTMLButtonElement | HTMLInputElement | HTMLSelectElement
@@ -330,9 +345,13 @@ async function run(fn: () => Promise<void>) {
   }
 }
 const createPasskey = button("Create Pilot passkey", async () => {
-  const p = embedded && needsSafariAuth()
-    ? await topLevelAuth({ kind: "create", name: name.value, appOrigin }) as PilotPasskey
-    : await createPilotPasskey(name.value);
+  notifyProgress("waiting-for-user");
+  let p: PilotPasskey;
+  try {
+    p = embedded && needsSafariAuth()
+      ? await topLevelAuth({ kind: "create", name: name.value, appOrigin }) as PilotPasskey
+      : await createPilotPasskey(name.value);
+  } finally { notifyProgress("processing"); }
   if (passkeys.some((v) => v.publicKey === p.publicKey))
     throw new Error("Passkey already registered");
   passkeys.push(p);
@@ -359,6 +378,7 @@ const signIn = button("Sign in with passkey", async () => {
   await renderLogs();
   status.textContent =
     "Passkey verified. Review the requesting app before authorizing a session.";
+  await offerExistingSession();
   if (embedded) goTo(pendingConnect ? "permissions" : "profile");
 });
 async function refreshAvailableBalances() {
@@ -480,6 +500,60 @@ node(
   "Cell policies constrain full lock/type/data hashes and capacity. A zero data hash permits arbitrary data. This is not a named-contract-method interpreter. Expiry is checked by the wallet; revocation and remaining budget are enforced on-chain.",
   policyHelp,
 );
+let resumable: { session: PilotWalletSession; owner: PilotPasskeySigner; expiresAt: number } | undefined;
+const continueSession = button("Continue existing session", async () => {
+  const saved = resumable, approval = pendingConnect;
+  if (!saved || !approval || !authenticated) throw new Error("Sign in to resume the saved session");
+  await saved.session.resumeAppAccess();
+  session = saved.session;
+  connection = {
+    address: await session.getRecommendedAddress(), ownerAddress: await saved.owner.getRecommendedAddress(),
+    account: session.options.account, appOrigin, expiresAt: saved.expiresAt,
+  };
+  reply(approval.envelope, connection);
+  pendingConnect = undefined;
+  resumable = undefined;
+  status.textContent = "Existing session resumed. Its remaining budget, permissions and expiry are unchanged.";
+  await renderLogs();
+  if (embedded) goTo("profile");
+}, review);
+continueSession.className = "primary full";
+continueSession.hidden = true;
+budget.addEventListener("input", () => {
+  resumable = undefined;
+  continueSession.hidden = true;
+});
+async function offerExistingSession() {
+  resumable = undefined;
+  continueSession.hidden = true;
+  if (!selected || !authenticated || !pendingConnect || !config.passkey || !paymasterUrl) return;
+  const raw = localStorage.getItem(accountKey(selected));
+  if (!raw) return;
+  const account: PilotWalletDescriptor = JSON.parse(raw), hash = pilotWalletLock(account).hash();
+  const journal: PilotWalletJournal | undefined = JSON.parse(localStorage.getItem("pilot:wallet:journal:" + hash) ?? "null");
+  const state = journal?.state;
+  const metadata = JSON.parse((state && localStorage.getItem("pilot:wallet:session-meta:" + state.publicKey)) || localStorage.getItem("pilot:wallet:active:" + hash) || "null");
+  if (!state || state.appOrigin !== appOrigin || metadata?.appOrigin !== appOrigin ||
+      !Number.isSafeInteger(metadata.expiresAt) || metadata.expiresAt <= Date.now()) return;
+  const key = localStorage.getItem("pilot:wallet:session-key:" + state.publicKey) as ccc.Hex | null;
+  if (!key) { status.textContent = "The session key is unavailable. Review a replacement session or recover the account."; return; }
+  const policyId = (p: PilotCellPolicy) => JSON.stringify([p.name,p.direction,p.lockHash,p.typeHash,p.dataHash,p.maxCapacity]);
+  const indices = state.policies.map(p => pendingConnect!.request.policies.findIndex(offered => policyId(p) === policyId(offered)));
+  if (indices.some(i => i < 0) || BigInt(state.remaining) > BigInt(pendingConnect.request.budget)) {
+    status.textContent = "Saved permissions or budget differ from this app request. Review a replacement session.";
+    return;
+  }
+  const passkey = selected;
+  const owner = new PilotPasskeySigner(client, passkey, config.passkey, challenge => assertOwner(passkey, challenge), config.poolLock);
+  const restored = engine(owner, account, key, metadata.expiresAt);
+  if (restored.publicKey !== state.publicKey) throw new Error("Saved session key does not match its grant");
+  resumable = {session: restored, owner, expiresAt: metadata.expiresAt};
+  selectedPolicies = indices;
+  policyList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((box,i) => box.checked = indices.includes(i));
+  budget.value = ccc.fixedPointToString(BigInt(state.remaining));
+  continueSession.hidden = false;
+  status.textContent = `Passkey verified. Continue the existing session with ${budget.value} CKB remaining, or explicitly review a replacement grant.`;
+}
 const grant = button(
   "Approve session with passkey",
   async () => {
@@ -559,6 +633,7 @@ const grant = button(
             Math.max(approval.request.durationMs ?? 3_600_000, 60_000),
             86_400_000,
           );
+        localStorage.setItem("pilot:wallet:session-meta:" + publicKey, JSON.stringify({expiresAt, appOrigin}));
         session = engine(owner, account, secret, expiresAt);
         const journal = await session.options.journal.load();
         const state: PilotWalletState = {
@@ -743,6 +818,7 @@ function goTo(step: ModalStep) {
   }
 }
 function renderModal() {
+  continueSession.disabled = busy || !resumable || !pendingConnect || !authenticated;
   grant.disabled = !ready || !pendingConnect || !authenticated || !selectedPolicies.length || selectedPolicies.length > MAX_DELEGATED_ACTIONS || busy;
   selectionCount.textContent = pendingConnect ? `${selectedPolicies.length} / ${MAX_DELEGATED_ACTIONS} policies selected · ${pendingConnect.request.policies.length} offered. Uncheck a policy to change your selection at the limit.` : '';
   policyList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((box, i) => {
@@ -948,6 +1024,8 @@ window.addEventListener("message", (event) => {
           box = node("input", undefined, l);
         box.type = "checkbox";
         box.onchange = () => {
+          resumable = undefined;
+          continueSession.hidden = true;
           selectedPolicies = box.checked
             ? (selectedPolicies.length < MAX_DELEGATED_ACTIONS && !selectedPolicies.includes(i) ? [...selectedPolicies, i] : selectedPolicies)
             : selectedPolicies.filter((n) => n !== i);

@@ -527,3 +527,53 @@ test("one-time approval reopens the existing frame and cancels without reconnect
   await expect(dialog).toBeVisible();
   expect(page.frames().find(f => f.url() === originalUrl)).toBe(frame);
 });
+
+test("user wait time does not expire connect or approval; processing timeouts remain scoped to the request", async ({ page }) => {
+  // Simulated wallet transport and clock: no chain transaction or passkey signature is claimed here.
+  await page.clock.install();
+  await page.route('http://localhost:5176/timeout-fixture*', route => route.fulfill({contentType:'text/html',body:`<!doctype html><p>Waiting for user</p><script>
+    const q = new URLSearchParams(location.search), channel=q.get('channel'), origin=q.get('appOrigin');
+    window.requests={};
+    window.reply=(id,method,result,params)=>parent.postMessage({protocol:'owl-pilot-wallet-v1',channel,id,method,result,params},origin);
+    addEventListener('message',event=>{
+      if(event.source!==parent || event.origin!==origin || event.data.channel!==channel) return;
+      const r=event.data; window.requests[r.method]=r;
+      if(r.method==='signMessage') window.reply(r.id,'approval');
+    });
+    window.reply('ready','ready');
+  </script>`}));
+  await page.goto('http://localhost:5177/tests/app.html?wallet='+encodeURIComponent('http://localhost:5176/timeout-fixture'));
+  await page.getByRole('button',{name:'Connect Pilot',exact:true}).click();
+  await expect(page.frameLocator('iframe').getByText('Waiting for user')).toBeVisible();
+  const frame=page.frames().find(f=>f.url().includes('/timeout-fixture'))!;
+  await frame.waitForFunction(()=>!!(window as any).requests?.connect);
+  await page.clock.fastForward(300_001);
+  expect(await page.evaluate(()=>(window as any).pilotTestProvider.pending.size)).toBe(1);
+  await frame.evaluate(()=>{
+    const w=window as any;
+    w.reply(w.requests.connect.id,'connect',{appOrigin:'http://localhost:5177',expiresAt:Date.now()+3_600_000});
+  });
+  await expect(page.locator('p').filter({hasText:'Connected'})).toBeVisible();
+  await page.evaluate(()=>{
+    const w=window as any;
+    w.result=w.pilotTestProvider.request('signMessage',{scope:'social.delete',message:'post:123',nonce:'timeout_nonce_12345'}).catch((e:Error)=>e.message);
+  });
+  const dialog=page.getByRole('dialog',{name:'Pilot wallet',exact:true});
+  await expect(dialog).toBeVisible();
+  await page.clock.fastForward(300_001);
+  expect(await page.evaluate(()=>(window as any).pilotTestProvider.pending.size)).toBe(1);
+  await frame.evaluate(()=>{
+    const w=window as any; w.reply(w.requests.signMessage.id,'progress',undefined,{phase:'processing'});
+  });
+  await expect.poll(()=>page.evaluate(() => [...(window as any).pilotTestProvider.pending.values()].some((p:any)=>p.timer!==undefined))).toBe(true);
+  await page.clock.fastForward(300_001);
+  expect(await page.evaluate(()=>(window as any).result)).toContain('same nonce');
+  await page.evaluate(()=>{
+    const w=window as any, p=w.pilotTestProvider;
+    w.result=p.request('send',{bytes:'0x',requestId:'stable-action-123'}).catch((e:Error)=>e.message);
+    // An app-window forgery must not pause a bound request timer.
+    window.dispatchEvent(new MessageEvent('message',{source:window,origin:'http://localhost:5176',data:{protocol:'owl-pilot-wallet-v1',channel:p.channel,id:[...p.pending.keys()][0],method:'progress',params:{phase:'waiting-for-user'}}}));
+  });
+  await page.clock.fastForward(300_001);
+  expect(await page.evaluate(()=>(window as any).result)).toContain('same action request ID');
+});

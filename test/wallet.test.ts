@@ -822,3 +822,63 @@ test("unselected messages use an owner-bound proof; edits, wrong owner and revoc
   await f.session.revoke();
   assert.equal(await verifyPilotScopedMessage(f.client, f.account, f.state, value, expected), false);
 });
+
+test("disconnect and reauthentication resume the retained grant without funding, signing or resetting limits", async (t) => {
+  const f = await fixture(t);
+  await f.session.sendTransaction(await f.payment(), "before-logout");
+  await f.session.endAppAccess();
+  const saved = structuredClone(f.journal.state);
+  const reconnected = new PilotWalletSession(f.options);
+  assert.equal(await reconnected.isConnected(), false);
+  const state = await reconnected.resumeAppAccess();
+  assert.deepEqual(state, saved);
+  assert.equal(await reconnected.isConnected(), true);
+  assert.equal(f.journal.receipts.length, 2);
+  assert.equal(f.signs, 1, "resumption creates no owner transaction");
+  assert.equal(state.remaining, ccc.fixedPointFrom(139).toString());
+  await reconnected.sendTransaction(await f.payment(), "after-login");
+  assert.equal(f.signs, 1);
+});
+
+test("resuming uses live receipt outputs while the indexer lags behind the confirmed grant", async (t) => {
+  const f = await fixture(t);
+  await f.session.endAppAccess();
+  t.mock.method(f.client, "findCellsByLock", async function* (lock: ccc.ScriptLike) {
+    for (const cell of f.cells)
+      if (cell.cellOutput.lock.eq(lock) && !cell.cellOutput.type?.eq(f.account.stateType)) yield cell;
+  });
+  await f.session.resumeAppAccess();
+  const tx = await f.session.prepareAppTransaction({ outputs: [{ lock: f.recipient, capacity: ccc.fixedPointFrom(61) }], outputsData: ["0x"] });
+  await f.session.sendTransaction(tx, "indexer-lag");
+  assert.equal(f.signs, 1);
+});
+
+test("expired, revoked and mismatched saved sessions cannot be resumed", async (t) => {
+  const f = await fixture(t);
+  await f.session.endAppAccess();
+  await assert.rejects(new PilotWalletSession({ ...f.options, expiresAt: Date.now() - 1 }).resumeAppAccess(), /expired/);
+  await assert.rejects(new PilotWalletSession({ ...f.options, appOrigin: "https://other.example" }).resumeAppAccess(), /another app\/key/);
+  await assert.rejects(new PilotWalletSession({ ...f.options, sessionKey: h(2) }).resumeAppAccess(), /another app\/key/);
+  assert.equal(f.journal.stopped, true);
+  await f.session.revoke();
+  await assert.rejects(f.session.resumeAppAccess(), /revoked or changed/);
+  assert.equal(f.journal.stopped, true);
+});
+
+test("closed funded accounts cannot fall back to initial funding", async (t) => {
+  const f = await fixture(t);
+  await f.session.recover();
+  const signs = f.signs;
+  await assert.rejects(f.session.grant({ ...f.state, sequence: "1" }, ccc.fixedPointFrom(1200)), /instead of funding it again/);
+  assert.equal(f.signs, signs);
+});
+
+test("initial funding selects its exact TYPE_ID seed despite owner-cell indexer reordering", async (t) => {
+  const f = await fixture(t, false);
+  f.cells.unshift(ccc.Cell.from({outPoint:{txHash:h(87),index:0}, cellOutput:{lock:f.account.ownerLock,capacity:ccc.fixedPointFrom(2000)},outputData:"0x"}));
+  await f.session.grant(f.state, ccc.fixedPointFrom(1200));
+  const receipt = f.journal.receipts[0]!;
+  const tx = ccc.Transaction.fromBytes(receipt.bytes);
+  assert.equal(ccc.hashCkb(tx.inputs[0]!.toBytes(), new Uint8Array(8)), ccc.Script.from(f.account.stateType).args);
+  assert.equal(f.signs, 1);
+});

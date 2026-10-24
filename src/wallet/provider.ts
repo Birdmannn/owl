@@ -53,7 +53,7 @@ export class PilotWalletProvider {
     {
       resolve: (v: unknown) => void;
       reject: (e: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
+      timer?: ReturnType<typeof setTimeout>;
       method: string;
     }
   >();
@@ -92,8 +92,22 @@ export class PilotWalletProvider {
     if (v.method === "approval") {
       const pending = this.pending.get(v.id);
       if (!pending || !["send", "signMessage"].includes(pending.method)) return;
-      this.approvalRequest = { id: v.id, opened: !this.dialog?.open };
+      clearTimeout(pending.timer);
+      pending.timer = undefined;
+      this.approvalRequest ??= { id: v.id, opened: !this.dialog?.open };
       this.open();
+      return;
+    }
+    if (v.method === "progress") {
+      const pending = this.pending.get(v.id);
+      if (!pending) return;
+      const phase = (v.params as { phase?: unknown } | undefined)?.phase;
+      if (phase === "waiting-for-user") {
+        clearTimeout(pending.timer);
+        pending.timer = undefined;
+      } else if (phase === "processing") {
+        this.armResponseTimer(v.id);
+      }
       return;
     }
     if (v.method === "ready") {
@@ -236,15 +250,9 @@ export class PilotWalletProvider {
       throw new Error("Connect Pilot first");
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(
-          new Error(
-            "Wallet response unavailable; retry the same action request ID and reconcile before new spending",
-          ),
-        );
-      }, this.options.timeoutMs ?? 300_000);
-      this.pending.set(id, { resolve, reject, timer, method });
+      this.pending.set(id, { resolve, reject, method });
+      // Connection starts with account/permission UI, not transaction execution.
+      if (method !== "connect") this.armResponseTimer(id);
       this.frame!.contentWindow!.postMessage(
         {
           protocol: PILOT_WALLET_PROTOCOL,
@@ -256,6 +264,23 @@ export class PilotWalletProvider {
         this.origin,
       );
     });
+  }
+  private armResponseTimer(id: string) {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      this.pending.delete(id);
+      if (this.approvalRequest?.id === id) this.approvalRequest = undefined;
+      const message = pending.method === "send"
+        ? "Wallet transaction response unavailable; retry the same action request ID and reconcile before new spending"
+        : pending.method === "signMessage"
+          ? "Wallet message signing timed out while processing; check its status and retry with the same nonce"
+          : pending.method === "connect"
+            ? "Wallet connection processing timed out; reopen Pilot and reconcile any saved funding transaction before trying again"
+            : "Wallet request timed out while processing; check the connection and reconcile any saved transactions before trying again";
+      pending.reject(new Error(message));
+    }, this.options.timeoutMs ?? 300_000);
   }
   async disconnect() {
     // Do not remove the signer or clear the account if settlement fails.
