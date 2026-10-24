@@ -908,3 +908,23 @@ test("owner replacement uses the live authority sequence when local state is mis
   assert.equal(f.journal.state!.sequence, "2");
   assert.equal(f.journal.state!.remaining, f.state.remaining);
 });
+
+test("initial grant transfers its funding capacity; replacement raises an allowance without silently moving funds", async (t) => {
+  const f = await fixture(t);
+  const grant = ccc.Transaction.fromBytes(f.journal.receipts[0]!.bytes);
+  const accountCapacity = grant.outputs.filter(o => o.lock.eq(pilotWalletLock(f.account))).reduce((n,o)=>n+o.capacity,0n);
+  const ownerCapacity = grant.outputs.filter(o => o.lock.eq(f.account.ownerLock)).reduce((n,o)=>n+o.capacity,0n);
+  assert.equal(accountCapacity, ccc.fixedPointFrom(1200));
+  assert.equal(ownerCapacity, ccc.fixedPointFrom(800));
+  await f.session.grant({...f.state, remaining: ccc.fixedPointFrom(1_000_000).toString()});
+  const replacement = ccc.Transaction.fromBytes(f.journal.receipts.at(-1)!.bytes);
+  assert.equal(replacement.outputs.filter(o=>o.lock.eq(pilotWalletLock(f.account))).reduce((n,o)=>n+o.capacity,0n), accountCapacity);
+  assert.equal(f.journal.state!.remaining, ccc.fixedPointFrom(1_000_000).toString());
+});
+
+test("an unfunded account cannot approve initial funding greater than the owner balance", async (t) => {
+  const f = await fixture(t, false);
+  await assert.rejects(f.session.grant({...f.state, remaining:ccc.fixedPointFrom(1_000_000).toString()}, ccc.fixedPointFrom(1_001_000)), /Insufficient CKB/);
+  assert.equal(f.signs, 0);
+  assert.equal(f.journal.receipts.length, 0);
+});

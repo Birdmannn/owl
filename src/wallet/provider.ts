@@ -158,7 +158,7 @@ export class PilotWalletProvider {
     header.append(origin, close);
     this.frame = document.createElement("iframe");
     this.frame.title = "Pilot wallet account and permissions";
-    this.frame.allow = `publickey-credentials-create ${this.origin}; publickey-credentials-get ${this.origin}`;
+    this.frame.allow = `publickey-credentials-create ${this.origin}; publickey-credentials-get ${this.origin}; clipboard-write ${this.origin}`;
     this.frame.referrerPolicy = "origin";
     this.frame.src = url.toString();
     this.dialog.addEventListener("cancel", (event) => { event.preventDefault(); this.hide(); });

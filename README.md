@@ -421,3 +421,12 @@ Replacement grants derive their sequence from the live authority under the walle
 
 
 Pilot wallet error displays, hosted SDK error responses and React modal error displays use the prefix **Pilot says: **. `formatPilotError(error)` is exported for integrating apps that render Pilot errors themselves; it keeps the prefix from being duplicated when an error passes through multiple layers. Errors remain errors, with their existing rejection and retry behavior; normal status messages are unchanged. Rebuild the wallet, SDK and React integration to use the updated presentation.
+
+
+### Session funding versus its spending limit
+
+Initial approval transfers the reviewed budget plus occupied authority-cell capacity from the passkey owner to the session account and returns owner change; the paymaster pays the eligible network fee. If the owner cannot cover initial funding, approval fails before signing. A replacement grant reuses existing account capacity and updates the spending allowance; it does not automatically transfer additional funds. That allowance may exceed current funds, so it is not a balance or a guarantee that an action can be funded.
+
+The wallet balance display now queries total capacity for the exact lock, including typed state/asset cells. CCC’s ordinary-cell balance excludes those cells and could previously display a funded session account as 0 CKB. Totals include occupied capacity, which is not all spendable. After a new grant confirms, the wallet refreshes balances; indexer lag can still delay totals. To verify a particular approval, use the session address from Copy address in the connected profile or the grant receipt’s hash in Queue and all account receipts and inspect its committed inputs and outputs. A displayed limit alone does not prove a transfer.
+
+In an embedded wallet, Copy address requests clipboard permission through the SDK iframe. A host permissions policy or browser can still block automatic copying; Pilot then selects the visible public address and asks you to copy it manually (Ctrl+C or ⌘C). This does not affect signing or funding.

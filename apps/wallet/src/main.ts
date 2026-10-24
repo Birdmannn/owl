@@ -386,12 +386,16 @@ const signIn = button("Sign in with passkey", async () => {
 });
 async function refreshAvailableBalances() {
   if (!selected) throw new Error("Select an account");
-  const owner = await client.getBalanceSingle(pilotPasskeyLock(selected));
+  // getBalanceSingle excludes cells with type scripts/data, including Pilot's funded authority.
+  const totalCapacity = (lock: ccc.ScriptLike) => client.getCellsCapacity({
+    script: lock, scriptType: "lock", scriptSearchMode: "exact",
+  });
   const raw = localStorage.getItem(accountKey(selected));
-  const account = raw
-    ? await client.getBalanceSingle(pilotWalletLock(JSON.parse(raw)))
-    : 0n;
-  balances.textContent = `Passkey owner: ${ccc.fixedPointToString(owner)} CKB. Session account: ${ccc.fixedPointToString(account)} CKB. State/asset occupied capacity is part of these balances.`;
+  const [owner, account] = await Promise.all([
+    totalCapacity(pilotPasskeyLock(selected)),
+    raw ? totalCapacity(pilotWalletLock(JSON.parse(raw))) : Promise.resolve(0n),
+  ]);
+  balances.textContent = `Passkey owner total: ${ccc.fixedPointToString(owner)} CKB. Session account total: ${ccc.fixedPointToString(account)} CKB. Totals include state/asset occupied capacity, which is not all spendable. A spending limit is an allowance, not a balance or automatic top-up.`;
   profileBalance.textContent = balances.textContent;
   fundingBalance.textContent = balances.textContent;
 }
@@ -661,7 +665,7 @@ const grant = button(
         // This explicit second review includes the exact first-funding amount before WebAuthn signing.
         const live = journal?.state;
         const total = live
-          ? "Existing account capacity is reused; this replaces its active session."
+          ? "Existing account capacity is reused; this replaces its active session. No additional spending funds are transferred. The approved spending limit can exceed the account balance and does not guarantee sufficient funds."
           : `Initial account funding: ${ccc.fixedPointToString(capacity)} CKB (budget plus occupied capacity).`;
         if (
           !(await confirmReview(
@@ -687,6 +691,9 @@ const grant = button(
         status.textContent =
           "Session confirmed on-chain. You can close the modal. Pilot stays connected for approved actions.";
         await renderLogs();
+        await refreshAvailableBalances().catch(() => {
+          profileBalance.textContent = "Session confirmed. Balance refresh unavailable; use Refresh balance to try again.";
+        });
         if (embedded) goTo("profile");
       },
     );
@@ -704,8 +711,18 @@ node("small", "Passkey account · CKB Testnet", profileSummary);
 const profileAddress = node("code", undefined, profileSummary);
 button("Copy address", async () => {
   if (!selected) throw new Error("Sign in first");
-  await navigator.clipboard.writeText(profileAddress.textContent ?? "");
-  status.textContent = "Address copied.";
+  try {
+    await navigator.clipboard.writeText(profileAddress.textContent ?? "");
+    status.textContent = "Address copied.";
+  } catch {
+    // Host permissions can block clipboard access even after iframe delegation.
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(profileAddress);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    status.textContent = "Automatic copying is blocked by your browser. Address selected; copy it manually (Ctrl+C or ⌘C).";
+  }
 }, profileSummary);
 const profileBalance = node("p", "Refresh to see your balance.", profileSummary);
 button("Refresh balance", refreshAvailableBalances, profileSummary);
@@ -852,7 +869,8 @@ function renderModal() {
   signIn.hidden = createMode;
   addresses.hidden = balances.hidden = refreshBalances.hidden = true;
   profileName.textContent = selected?.name || "Pilot";
-  profileAddress.textContent = connection?.address || ownerAddress.textContent;
+  const displayedAddress = connection?.address || ownerAddress.textContent;
+  if (profileAddress.textContent !== displayedAddress) profileAddress.textContent = displayedAddress;
   fundingAddress.textContent = selected ? ownerAddress.textContent : "Sign in to see your funding address.";
   fundingBalance.textContent = balances.textContent;
   profileHint.textContent = connection

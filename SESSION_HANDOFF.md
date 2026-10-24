@@ -1,3 +1,19 @@
+## Verified live funding and clipboard fix (2026-10-24)
+
+User supplied session address; read-only public testnet RPC confirmed exact-lock total 1963 CKB and ordinary-cell total 0. Initial committed grant 0x06726605f244584e3e00a047ea115f6606d88110a4b43e9c25477951f18904a7 consumes owner 100000 CKB, creates authority 1963 CKB (1763 occupied + 200 spending amount), returns owner 98037 CKB. Sponsor separately pays network fee. Latest committed replacement 0x8e64a03e7ee7b89365ed74790e745ddf764962e637b84942a5cdac4bcc8fc56f keeps same capacity, remaining allowance 200 CKB, sequence 1, 11 policies. Thus actual chain allowance is 200, not any larger UI maximum. No chain mutation performed.
+
+User Copy address failed due iframe clipboard permissions policy. Provider now delegates clipboard-write to exact wallet origin; wallet catches blocked/unavailable clipboard, selects visible address and gives manual Ctrl+C/Command+C instructions. Parent policies may still block automatic copy; no security-policy bypass. Added browser regression with blocked clipboard. README/web docs updated. Rebuild/redeploy wallet for fallback and SDK integrations for iframe permission.
+
+Validation: root check passed (118 tests, 5 environment-dependent skips); docs build and 15 tests passed; latest wallet build and all 11 browser tests passed. Clipboard regression also caught profile rerender clearing the selected text; render now preserves unchanged address text nodes. git diff --check passed. No deployment performed.
+
+## Latest investigation: approved budget and zero displayed session balance (2026-10-24)
+
+User saw owner ~98037 CKB / session 0 after approval, and a spending allowance exceeding funds. Identified balance bug: CCC client.getBalanceSingle filters scriptLenRange/outputDataLenRange to empty ordinary cells, omitting the funded TYPE_ID authority. Main wallet now queries getCellsCapacity exact lock with no such filters for both account totals, explains occupied capacity and allowance vs balance, and refreshes after grant confirmation (refresh failure does not report failed approval). Replacement review now explicitly states no additional spending funds transferred and allowance may exceed funds. Initial grant genuinely funds amount+occupied capacity via ownerProof completion; replacement preserves old anchor capacity and changes allowance only. Added regressions proving exact initial owner/account allocation, no silent replacement top-up, and overfunded initial approval failing before passkey signing. No on-chain operations made by assistant.
+
+Asked user for public session address or grant hash to verify their actual chain transaction. User asked where to locate it; told them Copy address in connected profile (ckt1...), or hash from a receipt with kind grant. Awaiting this public identifier; do not claim the specific approval is verified until RPC checked. README/web docs updated. No contract changes.
+
+Validation: root check passed (118 tests passed, 5 environment-dependent skips); wallet build and all 11 browser tests passed; docs build and all 15 docs tests passed; git diff --check passed. No deployment performed.
+
 ## Latest update: Pilot error presentation (2026-10-24)
 
 Added exported src/errors.ts formatPilotError(error) and PilotError with idempotent "Pilot says: " prefix. Wallet main errors and protocol error replies, Safari authentication error displays, hosted provider errors/connect validation failures, demo hosted-wallet errors and React PilotModal/PilotOffchainModal/PilotAccountMenu error displays use it. Normal status text unchanged; internal typed signing/consensus errors are preserved until presentation/transport boundaries. Apps can format raw Pilot errors with exported helper. README/web docs updated. Rebuild wallet + SDK/React clients; no contracts/deployment performed.

@@ -62,6 +62,17 @@ test('hosted app offers 50 policies and the user selects at most 16', async ({ p
   await choices.nth(49).check();
   await expect(choices.nth(0)).toBeDisabled();
   await expect(choices.nth(49)).toBeChecked();
+  // Expose the connected-profile control without funding an account in this UI fixture.
+  await frame.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async () => { throw new DOMException("Blocked by permissions policy", "NotAllowedError"); },
+    } });
+    const copy = [...document.querySelectorAll("button")].find(b => b.textContent === "Copy address")!;
+    copy.closest("section")!.hidden = false;
+    copy.click();
+  });
+  await expect(wallet.locator("#status")).toContainText("Address selected; copy it manually");
+  expect(await frame.evaluate(() => window.getSelection()?.getRangeAt(0).toString())).toMatch(/^ckt1/);
 });
 test("real browser WebAuthn registers and verifies a passkey without storing an owner private key", async ({
   page,
