@@ -1,4 +1,7 @@
 import "./style.css";
+import { MAX_DELEGATED_ACTIONS } from '../../../src/limits';
+import { validatePilotPolicyCatalog } from '../../../src/wallet/session';
+import { needsSafariAuth, topLevelAuth } from "./auth-bridge";
 import { ccc } from "@ckb-ccc/core";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import {
@@ -9,6 +12,7 @@ import {
   PilotPasskeySigner,
   canonicalWalletOrigin,
   type PilotPasskey,
+  type PilotAssertion,
 } from "../../../src/wallet/passkey";
 import {
   PILOT_WALLET_PROTOCOL,
@@ -121,7 +125,9 @@ if (embedded) {
   ).className = "storage-note";
 }
 const assertOwner = (passkey: PilotPasskey, challenge: ccc.Hex) =>
-  requestPilotAssertion(passkey, challenge, embedded ? appOrigin : undefined);
+  embedded && needsSafariAuth()
+    ? topLevelAuth({ kind: "assert", passkey, challenge, appOrigin }) as Promise<PilotAssertion>
+    : requestPilotAssertion(passkey, challenge, embedded ? appOrigin : undefined);
 async function confirmReview(message: string): Promise<boolean> {
   const dialog = node("dialog");
   dialog.className = "owner-review";
@@ -320,7 +326,9 @@ async function run(fn: () => Promise<void>) {
   }
 }
 const createPasskey = button("Create Pilot passkey", async () => {
-  const p = await createPilotPasskey(name.value);
+  const p = embedded && needsSafariAuth()
+    ? await topLevelAuth({ kind: "create", name: name.value, appOrigin }) as PilotPasskey
+    : await createPilotPasskey(name.value);
   if (passkeys.some((v) => v.publicKey === p.publicKey))
     throw new Error("Passkey already registered");
   passkeys.push(p);
@@ -445,6 +453,9 @@ node("h2", "Sign these on my behalf", review);
 const appName = node("p", "No app is requesting a connection.", review);
 appName.className = "app-request";
 const policyList = node("div", undefined, review);
+const selectionCount = node("p", undefined, review);
+selectionCount.setAttribute('role', 'status');
+selectionCount.className = 'fine';
 policyList.className = "policy-list";
 const emptyPolicies = node(
   "p",
@@ -728,7 +739,12 @@ function goTo(step: ModalStep) {
   }
 }
 function renderModal() {
-  grant.disabled = !ready || !pendingConnect || !authenticated || !selectedPolicies.length || busy;
+  grant.disabled = !ready || !pendingConnect || !authenticated || !selectedPolicies.length || selectedPolicies.length > MAX_DELEGATED_ACTIONS || busy;
+  selectionCount.textContent = pendingConnect ? `${selectedPolicies.length} / ${MAX_DELEGATED_ACTIONS} policies selected · ${pendingConnect.request.policies.length} offered. Uncheck a policy to change your selection at the limit.` : '';
+  policyList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((box, i) => {
+    box.checked = selectedPolicies.includes(i);
+    box.disabled = busy || !pendingConnect || (!box.checked && selectedPolicies.length >= MAX_DELEGATED_ACTIONS);
+  });
   if (!embedded) {
     welcome.hidden = profile.hidden = modalHeading.hidden = modalBack.hidden = authModes.hidden = funding.hidden = true;
     return;
@@ -758,7 +774,6 @@ function renderModal() {
   profileHint.textContent = connection
     ? "Pilot is ready. Only your approved actions may run automatically."
     : "Review this app’s permissions to connect. No automatic actions are approved yet.";
-  for (const box of policyList.querySelectorAll<HTMLInputElement>("input")) box.disabled = busy || !pendingConnect;
   budget.disabled = busy || !pendingConnect;
 }
 renderModal();
@@ -888,7 +903,7 @@ window.addEventListener("message", (event) => {
       if (pendingConnect || connection)
         throw new Error("A connection is already active");
       const v = request.params as PilotWalletConnect;
-      validatePilotPolicies(v.policies);
+      validatePilotPolicyCatalog(v.policies);
       if (
         typeof v.name !== "string" ||
         !v.name ||
@@ -910,7 +925,7 @@ window.addEventListener("message", (event) => {
         box.type = "checkbox";
         box.onchange = () => {
           selectedPolicies = box.checked
-            ? [...selectedPolicies, i]
+            ? (selectedPolicies.length < MAX_DELEGATED_ACTIONS && !selectedPolicies.includes(i) ? [...selectedPolicies, i] : selectedPolicies)
             : selectedPolicies.filter((n) => n !== i);
           renderModal();
         };

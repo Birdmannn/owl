@@ -1,4 +1,5 @@
 import { ccc } from "@ckb-ccc/core";
+import { MAX_ACTION_CATALOG, MAX_DELEGATED_ACTIONS } from '../limits.js';
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import {
   deploymentDep,
@@ -87,8 +88,15 @@ export function parsePilotWalletDescriptor(
 export function validatePilotPolicies(
   policies: readonly PilotCellPolicy[],
 ): void {
-  if (!Array.isArray(policies) || policies.length < 1 || policies.length > 16)
-    throw new Error("Approve between 1 and 16 cell policies");
+  validatePolicies(policies, MAX_DELEGATED_ACTIONS);
+}
+/** Offered policies are not authorized until the user selects a bounded subset. */
+export function validatePilotPolicyCatalog(policies: readonly PilotCellPolicy[]): void {
+  validatePolicies(policies, MAX_ACTION_CATALOG);
+}
+function validatePolicies(policies: readonly PilotCellPolicy[], limit: number): void {
+  if (!Array.isArray(policies) || policies.length < 1 || policies.length > limit)
+    throw new Error(`Choose between 1 and ${limit} cell policies`);
   for (const p of policies) {
     if (
       !p.name ||

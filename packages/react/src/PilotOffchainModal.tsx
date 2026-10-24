@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PilotActivityLog } from './PilotActivityLog.js';
 import type { PilotActivity, OffchainManifest } from '@owl/pilot';
+import { MAX_OFFCHAIN_PERMISSIONS } from '@owl/pilot';
 
 /** Consent UI for message delegation. It never requests on-chain approval or funding. */
 export function PilotOffchainModal({ visible, manifest, address, busy, error, onClose, onConnectOwner, onAuthorize, activity, approvedPermissions }: {
@@ -10,7 +11,8 @@ export function PilotOffchainModal({ visible, manifest, address, busy, error, on
   const [selected, setSelected] = useState<string[]>([]);
   const [localError, setLocalError] = useState('');
   const dialog = useRef<HTMLElement>(null);
-  useEffect(() => { if (visible) { setSelected([]); setLocalError(''); } }, [visible, address, manifest.audience]);
+  const permissionScope = JSON.stringify(manifest);
+  useEffect(() => { if (visible) { setSelected([]); setLocalError(''); } }, [visible, address, permissionScope]);
   useEffect(() => {
     if (!visible) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -34,11 +36,12 @@ export function PilotOffchainModal({ visible, manifest, address, busy, error, on
       <p>{manifest.name} · {manifest.audience}</p>
       <p className="fine">One wallet message approves only the selected actions for one hour. No CKB funding, transaction, or spending permission.</p>
       {address ? <><code style={{ overflowWrap: 'anywhere' }}>{address}</code>
+        {!approvedPermissions && <p className="fine" role="status">{selected.length} / {MAX_OFFCHAIN_PERMISSIONS} action types selected · {manifest.actions.length} offered. Uncheck an action to change your selection at the limit.</p>}
         {manifest.actions.map(action => <label key={action.id} className={`permission-choice ${selected.includes(action.id) ? 'checked' : ''}`}>
-          <input type="checkbox" checked={approvedPermissions ? approvedPermissions.includes(action.id) : selected.includes(action.id)} disabled={busy || !!approvedPermissions} onChange={event => setSelected(previous => event.target.checked ? [...previous, action.id] : previous.filter(id => id !== action.id))}/>
+          <input type="checkbox" checked={approvedPermissions ? approvedPermissions.includes(action.id) : selected.includes(action.id)} disabled={busy || !!approvedPermissions || (!selected.includes(action.id) && selected.length >= MAX_OFFCHAIN_PERMISSIONS)} onChange={event => { const checked = event.target.checked; setSelected(previous => checked ? (previous.length < MAX_OFFCHAIN_PERMISSIONS && !previous.includes(action.id) ? [...previous, action.id] : previous) : previous.filter(id => id !== action.id)); }}/>
           <span><strong>{action.name}</strong><small>{action.description}</small><code>{action.id} · verified by the receiving app</code></span>
         </label>)}
-        {!approvedPermissions && <><button className="primary full" disabled={busy || !selected.length} onClick={() => { setLocalError(''); void onAuthorize([...selected], Date.now() + 3_600_000).catch(error => setLocalError(error instanceof Error ? error.message : String(error))); }}>Approve selected off-chain actions</button>
+        {!approvedPermissions && <><button className="primary full" disabled={busy || !selected.length || selected.length > MAX_OFFCHAIN_PERMISSIONS} onClick={() => { setLocalError(''); if (!selected.length || selected.length > MAX_OFFCHAIN_PERMISSIONS) return; void onAuthorize([...selected], Date.now() + 3_600_000).catch(error => setLocalError(error instanceof Error ? error.message : String(error))); }}>Approve selected off-chain actions</button>
         <button className="secondary full" disabled={busy} onClick={onClose}>Continue without automatic signing</button></>}
         {approvedPermissions && <button className="primary full" onClick={onClose}>Return to app</button>}
       </> : <button className="primary full" onClick={onConnectOwner}>Connect owner wallet for social demo</button>}

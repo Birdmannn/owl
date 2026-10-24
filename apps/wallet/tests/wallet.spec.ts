@@ -45,6 +45,24 @@ async function returnWithPasskey(page: Page) {
   await expect(wallet.locator("#status")).toContainText("Passkey verified");
   return wallet;
 }
+test('hosted app offers 50 policies and the user selects at most 16', async ({ page, context }) => {
+  await page.goto('http://localhost:5177/tests/app.html?catalog=50');
+  await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();
+  const wallet = await enterPilot(page);
+  const frame = page.frames().find(f => f.url().startsWith('http://localhost:5176/'))!;
+  await authenticator(context, frame);
+  await wallet.getByLabel('Account name', { exact: true }).fill('Catalog tester');
+  await wallet.getByRole('button', { name: 'Create Pilot passkey', exact: true }).click();
+  const choices = wallet.getByRole('checkbox');
+  await expect(choices).toHaveCount(50);
+  for (let i = 0; i < 16; i++) await choices.nth(i).check();
+  await expect(wallet.getByText('16 / 16 policies selected', { exact: false })).toBeVisible();
+  await expect(choices.nth(16)).toBeDisabled();
+  await choices.nth(0).uncheck();
+  await choices.nth(49).check();
+  await expect(choices.nth(0)).toBeDisabled();
+  await expect(choices.nth(49)).toBeChecked();
+});
 test("real browser WebAuthn registers and verifies a passkey without storing an owner private key", async ({
   page,
   context,
@@ -402,4 +420,74 @@ test("blocked embedded storage fails closed before creating a passkey and never 
     ),
   ).toBeNull();
   expect(context.pages()).toHaveLength(1);
+});
+
+test('Safari uses a source-bound top-level ceremony and returns the public passkey to the modal', async ({ page, context }) => {
+  await context.addInitScript(() => Object.defineProperty(navigator, 'userAgent', {
+    value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',
+  }));
+  await page.goto('http://localhost:5177/tests/app.html');
+  await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();
+  const wallet = await enterPilot(page);
+  await wallet.getByLabel('Account name', { exact: true }).fill('Safari Alice');
+  await wallet.getByRole('button', { name: 'Create Pilot passkey', exact: true }).click();
+  await expect(wallet.getByRole('heading', { name: 'Continue with Safari', exact: true })).toBeVisible();
+  expect(context.pages()).toHaveLength(1);
+  const opened = context.waitForEvent('page');
+  await wallet.getByRole('button', { name: 'Continue in Pilot', exact: true }).click();
+  const auth = await opened;
+  const authCdp = await authenticator(context, auth);
+  let savedCredential: unknown;
+  authCdp.on('WebAuthn.credentialAdded', event => { savedCredential = event.credential; });
+  await expect(auth.getByText('Requesting app: http://localhost:5177', { exact: true })).toBeVisible();
+  await expect(auth.getByRole('button', { name: 'Continue with passkey' })).toBeEnabled();
+  // Same-origin spoof from a different Window is ignored by the opener binding.
+  const frame = page.frames().find(f => f.url().startsWith('http://localhost:5176/'))!;
+  await frame.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
+    source: window, origin: location.origin,
+    data: { protocol: 'owl-pilot-top-auth-v1', method: 'result', result: {} },
+  })));
+  await auth.getByRole('button', { name: 'Continue with passkey' }).click();
+  await expect(wallet.locator('#status')).toContainText('Passkey created');
+  await expect(wallet.getByRole('heading', { name: 'Sign these on my behalf', exact: true })).toBeVisible();
+  await expect.poll(() => auth.isClosed()).toBe(true);
+  const records = await frame.evaluate(() => JSON.parse(localStorage.getItem('pilot:wallet:passkeys:v1')!));
+  expect(records).toHaveLength(1);
+  expect(records[0].origin).toBe('http://localhost:5176');
+  expect(Object.keys(records[0])).not.toContain('privateKey');
+  expect(await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('pilot:wallet:')))).toEqual([]);
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();
+  const again = await enterPilot(page);
+  await again.getByLabel('Pilot account').selectOption({ index: 1 });
+  await again.getByRole('button', { name: 'Sign in with passkey', exact: true }).click();
+  const secondOpened = context.waitForEvent('page');
+  await again.getByRole('button', { name: 'Continue in Pilot', exact: true }).click();
+  const second = await secondOpened;
+  await expect(second.getByText(/Authenticate Safari Alice/)).toBeVisible();
+  const secondCdp = await context.newCDPSession(second);
+  await secondCdp.send("WebAuthn.enable");
+  const authenticators = await secondCdp.send('WebAuthn.addVirtualAuthenticator', { options: {
+    protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
+    hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
+  } });
+  expect(savedCredential).toBeTruthy();
+  await secondCdp.send('WebAuthn.addCredential', { authenticatorId: authenticators.authenticatorId, credential: savedCredential });
+  await second.getByRole('button', { name: 'Continue with passkey' }).click();
+  await expect(again.locator('#status')).toContainText('Passkey verified');
+  await expect.poll(() => second.isClosed()).toBe(true);
+  await expect(again.getByRole('heading', { name: 'Sign these on my behalf', exact: true })).toBeVisible();
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();
+  const cancelled = await enterPilot(page);
+  await cancelled.getByLabel('Pilot account').selectOption({ index: 1 });
+  await cancelled.getByRole('button', { name: 'Sign in with passkey', exact: true }).click();
+  const cancelledOpened = context.waitForEvent('page');
+  await cancelled.getByRole('button', { name: 'Continue in Pilot', exact: true }).click();
+  const cancelledAuth = await cancelledOpened;
+  await cancelledAuth.close();
+  await expect(cancelled.locator('#error')).toContainText('authentication window closed');
+  await expect(cancelled.locator('#accounts')).toBeVisible();
 });

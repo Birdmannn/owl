@@ -27,7 +27,7 @@ npm run demo
 
 ## Pilot passkey wallet and isolated signing
 
-Pilot now includes a separate **passkey-owned wallet preview**, without requiring JoyID. Its SDK modal embeds a dedicated wallet origin in an isolated iframe; it opens no separate browser window. The owner private key stays in the passkey authenticator; session private keys stay on the wallet origin rather than in integrating apps. The existing CCC wallet wrapper and broad-key `PilotAccountSigner` remain separate APIs.
+Pilot now includes a separate **passkey-owned wallet preview**, without requiring JoyID. Its SDK modal embeds a dedicated wallet origin in an isolated iframe; Safari alone uses a separate top-level passkey window; other browsers keep authentication embedded. The owner private key stays in the passkey authenticator; session private keys stay on the wallet origin rather than in integrating apps. The existing CCC wallet wrapper and broad-key `PilotAccountSigner` remain separate APIs.
 
 The new `pilot-passkey-lock` verifies user-verified WebAuthn assertions. The new `pilot-wallet-session-lock` requires a singleton built-in TYPE_ID authority on every automatic spend and enforces the approved cell policies, cumulative CKB spending budget, sequence and full fee sponsorship. The passkey owner can replace, revoke or close that authority. These restrictions are enforced on-chain, rather than only by SDK permission labels. App builders and type-script rules still apply.
 
@@ -37,11 +37,11 @@ Run `npm ci --prefix apps/wallet` and `npm run dev --prefix apps/wallet` for the
 
 The wallet has a dark-only interface matching the demo and docs branding: Owl artwork, forest-green panels and lime accents. Its responsive layout separates account creation/sign-in, explicit app permissions and budget review, session/recovery controls, and expandable queue receipts. Public backup/import tools and technical policy details are expandable; permissions remain unchecked by default.
 
-`PilotWalletProvider.connect()` opens the compact, dark Pilot modal using the original demo’s visual style. Its height follows the current content, including spacing and padding, up to 70vh; longer screens scroll inside the modal. It shows one screen at a time: **Welcome to Pilot → passkey sign-in or account creation → selected permissions and spending budget → profile**. It does not embed the wallet’s full dashboard into the visible modal. The profile contains the address/balance, permission review, expandable queue/receipt logs, session recovery, and public backup/restore. Account names are local labels, not registered usernames. No external-wallet chooser, “Add wallet” or “Add JoyID” step is part of this flow. The modal hides only after the on-chain grant confirms. `provider.open()` reopens account, balance, permission, log and recovery controls; Close/Escape or `provider.hide()` hides the UI while retaining the iframe for approved automatic actions. `disconnect()` settles saved receipts before removing it; failed settlement preserves the connection. Native passkey prompts still appear for authentication/owner authorization. The app must permit the wallet origin in CSP `frame-src` and delegate WebAuthn permissions; strict style CSP can use `styleNonce`. Browsers can partition or block embedded storage/passkeys: there is no popup fallback or guarantee of shared discovery across apps. See [PILOT_WALLET.md](PILOT_WALLET.md) for hosting, recovery and trust limits.
+`PilotWalletProvider.connect()` opens the compact, dark Pilot modal using the original demo’s visual style. Its height follows the current content, including spacing and padding, up to 70vh; longer screens scroll inside the modal. It shows one screen at a time: **Welcome to Pilot → passkey sign-in or account creation → selected permissions and spending budget → profile**. It does not embed the wallet’s full dashboard into the visible modal. The profile contains the address/balance, permission review, expandable queue/receipt logs, session recovery, and public backup/restore. Account names are local labels, not registered usernames. No external-wallet chooser, “Add wallet” or “Add JoyID” step is part of this flow. The modal hides only after the on-chain grant confirms. `provider.open()` reopens account, balance, permission, log and recovery controls; Close/Escape or `provider.hide()` hides the UI while retaining the iframe for approved automatic actions. `disconnect()` settles saved receipts before removing it; failed settlement preserves the connection. Native passkey prompts still appear for authentication/owner authorization. The app must permit the wallet origin in CSP `frame-src` and delegate WebAuthn permissions; strict style CSP can use `styleNonce`. Browsers can partition or block embedded storage/passkeys: the Safari authentication window does not bypass blocked storage or provide shared discovery across apps. See [PILOT_WALLET.md](PILOT_WALLET.md) for hosting, recovery and trust limits.
 
 **Activation and limits:** the unchanged session contract remains deployed on CKB testnet. The revised embedded passkey owner lock is deployed on CKB testnet in transaction `0x771edc9c5daf2f2e4c40eac48e3fc909f943d9541d59c6863454ede0f015f8d3` (output 0), recorded as `passkey` in `deployments/pilot-sponsored.json`. The old testnet owner code cell was consumed to reclaim deployment capacity on 2026-10-23. Its historical record is archived under `retiredPasskeyLegacy`; `passkeyLegacy` is unset. Accounts using that old code dependency cannot spend or recover through it while it is unavailable. No automatic funds/identity migration has occurred. Rebuild/redeploy the wallet, backend and integrating apps with the revised deployment records, then configure hosting and sponsorship before using on-chain setup. Deployment preserves change below the minimum ordinary-cell capacity in the deployer-controlled code cell instead of spending it as a fee. No public-testnet end-to-end success is claimed. Session keys remain accessible to the wallet origin's own scripts. Only one on-chain session is active per account; a larger permission list must fit the existing state-cell capacity or use a funded replacement account. Expiry is enforced locally, while revocation and budget are enforced on-chain. Cross-device metadata/receipt synchronization, social recovery and universal token/NFT recovery are not included. Local account labels are not registered Pilot usernames. The earlier `PilotAccountSigner` browser demo below still has its original broader authority and custody limits.
 
-**Hosted-wallet development:** When embedding the hosted HTTPS wallet, serve the integrating app over trusted HTTPS too, including local development. Chromium/Brave can report “WebAuthn is not supported on sites with TLS certificate errors” for a hosted wallet inside an HTTP localhost page even when the wallet certificate is valid. Use a trusted local certificate or an HTTPS preview deployment; clicking through an untrusted-certificate warning is insufficient. Localhost-to-localhost virtual-authenticator tests do not verify this hosted-wallet configuration. Safari embedded passkey creation remains a separate browser compatibility limitation.
+**Hosted-wallet development:** When embedding the hosted HTTPS wallet, serve the integrating app over trusted HTTPS too, including local development. Chromium/Brave can report “WebAuthn is not supported on sites with TLS certificate errors” for a hosted wallet inside an HTTP localhost page even when the wallet certificate is valid. Use a trusted local certificate or an HTTPS preview deployment; clicking through an untrusted-certificate warning is insufficient. Localhost-to-localhost virtual-authenticator tests do not verify this hosted-wallet configuration. Safari embedded passkey restrictions are handled by a Safari-only top-level authentication window; allow popups when prompted.
 
 ## Persistent owner-recoverable Pilot accounts
 
@@ -157,7 +157,7 @@ These are the demo’s default amounts; a smaller chosen budget reduces the fee 
 
 ### 2. Accept instantly, sign and settle in the background
 
-The app supplies up to ten possible next actions. Pilot checks each against the current projected state, permission, local expiration, and available budget. Readiness is refreshed after state changes; it is not a permanently true flag or a search ten moves into the future.
+The app can offer up to 50 possible next actions and pass the explicitly selected candidate IDs to `pilot.prepare(candidates, selectedIds)`. Pilot prevalidates only the selected subset: up to ten, or the configured lower `lookahead`. Calling `prepare(candidates)` without a selection retains the existing behavior and requires the entire list to fit that preparation limit. Readiness is refreshed after state changes; it is not a permanently true flag or a search ten moves into the future.
 
 When the user takes a ready action, Pilot reserves its fee and durably queues it before returning the optimistic state. The app can render immediately, without another owner-wallet popup or a pending badge on the move. The transaction inspector separately tracks actual settlement.
 
@@ -170,7 +170,7 @@ sequenceDiagram
     participant Adapter as CKB adapter and session key
     participant Chain as CKB node and contract
 
-    App->>Pilot: prepare(up to 10 alternative next actions)
+    App->>Pilot: prepare(up to 50 choices, up to 10 selected IDs)
     Pilot->>Adapter: Validate action and estimate fee
     Adapter-->>Pilot: Allowed action and reserved cost
     Pilot-->>App: Readiness for current state revision
@@ -227,9 +227,31 @@ flowchart TD
 
 Exhausting the budget stops new automatic moves; it does not consume the protected capacity. Local session expiry also stops new actions in the SDK, but the current contract has no on-chain expiry: the owner must recover the session to revoke its on-chain authority.
 
+## Action catalogs and user selection
+
+An integrating app can declare up to **50 action types** in a version-2 cell-delegation manifest or an off-chain manifest, or offer up to **50 cell policies** through the hosted wallet provider. Users see the full list and explicitly choose a bounded subset:
+
+| Catalog | Offered | Approved per grant |
+| --- | --- | --- |
+| Version-2 on-chain delegation | Up to 50 | Up to 16 |
+| Off-chain message delegation | Up to 50 | Up to 32 |
+| Hosted passkey wallet policies | Up to 50 | Up to 16 |
+| Prevalidation candidates | Up to 50 | Up to 10 prepared, or lower `lookahead` |
+
+`PilotModal`, `PilotOffchainModal`, and the hosted passkey wallet show the selection count and disable unchecked boxes when the cap is reached; selected boxes remain available to uncheck. Owner-only actions are visible but cannot be selected for delegation. The SDK rejects oversized selections, including restored/forged grants, independently of the UI. Only the chosen rules enter the delegated lock or signed off-chain grant. For version-2 and off-chain manifests, the complete manifest is still hashed, so changes to any declaration require fresh approval. Hosted wallet connection requests validate the full offered catalog separately from the selected policies encoded in the approved wallet state; the on-chain state still permits at most 16 policies. The original counter connector remains limited to its single `counter.increment` policy.
+
+For an existing Pilot instance, the app can display all candidate choices, obtain the user's selection, and then prepare only those IDs:
+
+```ts
+// allCandidates contains up to 50 choices; selectedIds contains up to 10.
+await pilot.prepare(allCandidates, selectedIds);
+```
+
+Unselected candidates are not validated or made ready, and previously prepared candidates are replaced. Invalid, duplicate, or oversized selections are rejected rather than silently truncated. Prevalidation is separate from signing consent: the adapter must still enforce the approved grant. These limits count action types or alternative next candidates, not repeated executions; session budgets and expiration apply separately.
+
 ## Execution model
 
-1. The app supplies up to ten possible next actions to `pilot.prepare()`.
+1. The app supplies up to 50 possible next actions to `pilot.prepare(candidates, selectedIds)`, selecting at most ten to prevalidate. Without selected IDs, the supplied list must contain at most ten actions (or the configured lower `lookahead`).
 2. An adapter prevalidates each against projected state, session policy, and unreserved budget.
 3. `pilot.readiness(moveId).ready` becomes true only for an allowed, affordable action at the current state revision.
 4. `pilot.execute(moveId)` reserves budget and durably saves the action before exposing its optimistic state. It does not wait for wallet approval or chain confirmation.
@@ -359,3 +381,5 @@ Deploy the docs as a second Vercel project rooted at `apps/docs`, using its own 
 The V2 proposal also covers starting an independent new session while an older session settles, retaining separate queues, and reclaiming the older session’s CKB later after its pending transactions are resolved. This is planned behavior; the current demo still requires ending or resuming its existing funded session before creating another for that integration.
 
 V2 also investigates authenticated cross-browser/device account discovery, public recovery metadata and receipt restoration. Creating multiple passkey wallets and switching locally already work in the embedded wallet; automatic cross-device discovery does not. Passkey sync alone does not restore account metadata, journals or session keys. See [the V2 roadmap](IMPLEMENTATION_V2.md#account-creation-discovery-and-recovery-to-investigate).
+
+Safari authentication uses a user-clicked “Continue in Pilot” window on the same wallet origin (`/auth.html`). Creation returns only the public passkey descriptor; signing returns a challenge-bound assertion which the frame verifies cryptographically. Results require the exact opened Window, wallet origin and fresh request token. Session keys and journals stay in the wallet frame. The top-level window shows the requesting app and an explicit passkey button; owner transaction details remain reviewed in the modal. Closing the window cancels authentication; blocked popups can be retried. Other browsers do not use this fallback. The production build includes both wallet and authentication entry points. Do not add COOP headers which sever the opener relationship. This has browser-automation coverage using Chromium virtual authenticators with Safari detection; actual Safari/device verification remains required. No new contract deployment is needed.

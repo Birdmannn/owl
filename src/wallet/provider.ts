@@ -1,7 +1,7 @@
 import { ccc } from "@ckb-ccc/core";
 import { canonicalWalletOrigin } from "./passkey.js";
 import {
-  validatePilotPolicies,
+  validatePilotPolicyCatalog,
   type PilotCellPolicy,
   type PilotWalletDescriptor,
 } from "./session.js";
@@ -149,7 +149,7 @@ export class PilotWalletProvider {
   }
   async connect(request: PilotWalletConnect): Promise<PilotWalletConnection> {
     if (this.disposed) throw new Error("Provider disposed");
-    validatePilotPolicies(request.policies);
+    validatePilotPolicyCatalog(request.policies);
     if (
       !request.name ||
       request.name.length > 100 ||

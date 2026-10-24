@@ -5,21 +5,22 @@ const provider = new PilotWalletProvider({
   timeoutMs: 300_000,
 });
 Object.assign(window, { pilotTestProvider: provider });
+const catalogSize = Number(new URLSearchParams(location.search).get('catalog') ?? 1);
 document.querySelector("button")!.onclick = () =>
   void provider
     .connect({
       name: "External test app",
       budget: ccc.fixedPointFrom(10).toString(),
-      policies: [
+      policies: Array.from({ length: catalogSize }, (_, i) => (
         {
-          name: "Like posts",
+          name: catalogSize === 1 ? "Like posts" : `Action ${i}`,
           direction: "message",
           lockHash: ccc.hashCkb(ccc.bytesFrom("social.like", "utf8")),
           typeHash: ("0x" + "00".repeat(32)) as ccc.Hex,
           dataHash: ("0x" + "00".repeat(32)) as ccc.Hex,
           maxCapacity: "1",
-        },
-      ],
+        }
+      )),
     })
     .then(
       () => {

@@ -23,6 +23,8 @@ import {
   parsePilotWalletDescriptor,
   pilotWalletDigest,
   validatePilotWalletEffects,
+  validatePilotPolicies,
+  validatePilotPolicyCatalog,
   buildPilotWalletTransaction,
   verifyPilotScopedMessage,
   verifyPilotWalletOwnership,
@@ -31,6 +33,16 @@ import {
   type PilotWalletOptions,
   type PilotCellPolicy,
 } from "../src/wallet/session.js";
+
+test('hosted wallet offers 50 policies while encoded grants still enforce the 16-policy limit', () => {
+  const policies: PilotCellPolicy[] = Array.from({ length: 50 }, (_, i) => ({ name: `Action ${i}`, direction: 'message', lockHash: `0x${'01'.repeat(32)}`, typeHash: `0x${'00'.repeat(32)}`, dataHash: `0x${'00'.repeat(32)}`, maxCapacity: '1' }));
+  assert.doesNotThrow(() => validatePilotPolicyCatalog(policies));
+  assert.doesNotThrow(() => validatePilotPolicies(policies.slice(-16)));
+  assert.throws(() => validatePilotPolicies(policies.slice(-17)), /1 and 16/);
+  assert.throws(() => validatePilotPolicyCatalog([...policies, policies[0]!]), /1 and 50/);
+  const malformed = structuredClone(policies); malformed[49]!.lockHash = '0x01';
+  assert.throws(() => validatePilotPolicyCatalog(malformed), /full 32-byte/);
+});
 import {
   PILOT_LEGACY_PASSKEY_CODE_HASH,
   PILOT_PASSKEY_CODE_HASH,

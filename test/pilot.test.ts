@@ -19,6 +19,38 @@ async function create(overrides: Partial<Parameters<typeof Pilot.create<State, A
     store: new MemoryStore<State, Action>(), autoSettle: false, now: () => 0, ...overrides });
 }
 
+test('a 50-candidate catalog prepares only the explicit subset and never silently truncates it', async () => {
+  let validations = 0;
+  const base = adapter();
+  const pilot = await create({ adapter: { ...base, async validate(action, context) { validations++; return base.validate(action, context); } } });
+  const catalog = Array.from({ length: 50 }, (_, i) => candidate(`move${i}`));
+  const selected = catalog.slice(-10).map(c => c.id);
+  await pilot.prepare(catalog, selected);
+  assert.equal(validations, 10);
+  assert.equal(pilot.readiness('move49').ready, true);
+  assert.equal(pilot.readiness('move0').ready, false);
+  await assert.rejects(pilot.execute('move0'), /not ready/);
+  await assert.rejects(pilot.prepare(catalog), /At most 10/);
+  await assert.rejects(pilot.prepare(catalog, [...selected, 'move0']), /At most 10/);
+  await assert.rejects(pilot.prepare(catalog, ['unknown']), /Unknown selected/);
+  await assert.rejects(pilot.prepare(catalog, ['move0', 'move0']), /Duplicate selected/);
+  await assert.rejects(pilot.prepare([...catalog, candidate('extra')], ['move0']), /At most 50/);
+  assert.equal(validations, 10);
+  await pilot.prepare(catalog, ['move0']);
+  assert.equal(pilot.readiness('move49').ready, false);
+  assert.equal(pilot.readiness('move0').ready, true);
+  await pilot.prepare(catalog, []);
+  assert.equal(pilot.readiness('move0').ready, false);
+});
+
+test('selected candidates respect a lower lookahead limit', async () => {
+  const pilot = await create({ lookahead: 2 });
+  const catalog = Array.from({ length: 50 }, (_, i) => candidate(`move${i}`));
+  await assert.rejects(pilot.prepare(catalog, ['move0', 'move1', 'move2']), /At most 2/);
+  await pilot.prepare(catalog, ['move48', 'move49']);
+  assert.equal(pilot.readiness('move49').ready, true);
+});
+
 test('acceptance is optimistic and rapid clicks cannot spend the same reservation', async () => {
   const pilot = await create();
   await pilot.prepare([candidate('left'), candidate('right')]);

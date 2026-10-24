@@ -1,4 +1,5 @@
 import { PermanentSettlementError } from './types.js';
+import { MAX_ACTION_CATALOG, MAX_PREPARED_CANDIDATES } from './limits.js';
 import type { Adapter, Candidate, Journal, PilotEvent, Readiness, Session, Store } from './types.js';
 
 export interface PilotOptions<State, Action> {
@@ -23,13 +24,13 @@ export class Pilot<State, Action> {
 
   private constructor(private options: PilotOptions<State, Action>, private journal: Journal<State, Action>) {
     this.now = options.now ?? Date.now;
-    this.limit = options.lookahead ?? 10;
+    this.limit = options.lookahead ?? MAX_PREPARED_CANDIDATES;
   }
 
   static async create<State, Action>(options: PilotOptions<State, Action>): Promise<Pilot<State, Action>> {
     if (options.budget < 0n) throw new Error('Budget cannot be negative');
-    const limit = options.lookahead ?? 10;
-    if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error('Lookahead must be between 1 and 10');
+    const limit = options.lookahead ?? MAX_PREPARED_CANDIDATES;
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PREPARED_CANDIDATES) throw new Error(`Lookahead must be between 1 and ${MAX_PREPARED_CANDIDATES}`);
     const saved = await options.store.load();
     if (saved && (saved.version !== 1 || JSON.stringify(saved.session) !== JSON.stringify(options.session))) {
       throw new Error('Stored journal belongs to a different session');
@@ -77,13 +78,22 @@ export class Pilot<State, Action> {
     return { ...cached };
   }
 
-  /** Checks up to ten alternative next actions against the same projected state. */
-  async prepare(candidates: Candidate<Action>[]): Promise<void> {
-    if (candidates.length > this.limit) throw new Error(`At most ${this.limit} candidates can be prepared`);
+  /** Supply up to 50 choices; explicitly select up to lookahead to prevalidate. */
+  async prepare(candidates: Candidate<Action>[], selectedIds?: readonly string[]): Promise<void> {
+    if (candidates.length > MAX_ACTION_CATALOG) throw new Error(`At most ${MAX_ACTION_CATALOG} candidates can be offered`);
     if (new Set(candidates.map(candidate => candidate.id)).size !== candidates.length) throw new Error('Duplicate candidate ID');
+    const selected = selectedIds ?? candidates.map(candidate => candidate.id);
+    if (selected.length > this.limit) throw new Error(`At most ${this.limit} candidates can be prepared; select a subset of the offered candidates`);
+    if (new Set(selected).size !== selected.length) throw new Error('Duplicate selected candidate ID');
+    const catalog = new Map(candidates.map(candidate => [candidate.id, candidate]));
+    const prepared = selected.map(id => {
+      const candidate = catalog.get(id);
+      if (!candidate) throw new Error('Unknown selected candidate ID');
+      return candidate;
+    });
     const revision = this.journal.revision;
     const context = { state: this.state, session: structuredClone(this.journal.session), availableBudget: this.availableBudget };
-    const results = await Promise.all(candidates.map(async candidate => {
+    const results = await Promise.all(prepared.map(async candidate => {
       const action = structuredClone(candidate.action);
       const validation = await this.options.adapter.validate(structuredClone(action), structuredClone(context));
       if (validation.cost < 0n) throw new Error('Validation cost cannot be negative');

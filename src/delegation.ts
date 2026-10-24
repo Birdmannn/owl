@@ -3,6 +3,7 @@ import { ccc } from '@ckb-ccc/core';
 import type { Context, Validation } from './types.js';
 import type { Deployment } from './ckb/counter.js';
 import { DELEGATION_V1_CODE_HASH } from './ckb/delegation-code.js';
+import { MAX_ACTION_CATALOG, MAX_DELEGATED_ACTIONS } from './limits.js';
 
 export interface PilotTransition {
   kind: 'u64-increment' | 'u64-decrement';
@@ -85,7 +86,7 @@ export function validatePilotAppManifest(manifest: PilotAppManifest): void {
   if (manifest.network !== `ckb-${manifest.policy.deployment.network}`) throw new Error('Manifest network mismatch');
   ccc.OutPoint.from(manifest.policy.deployment.outPoint);
   if (ccc.bytesFrom(manifest.policy.deployment.genesisHash).length !== 32) throw new Error('Invalid genesis hash');
-  if (!manifest.actions.length || manifest.actions.length > 16) throw new Error('Declare between 1 and 16 actions');
+  if (!Array.isArray(manifest.actions) || !manifest.actions.length || manifest.actions.length > MAX_ACTION_CATALOG) throw new Error(`Declare between 1 and ${MAX_ACTION_CATALOG} actions`);
   const ids = new Set<string>();
   for (const action of manifest.actions) {
     if (!/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(action.id) || !action.name || !action.description || !action.operation || ids.has(action.id)) throw new Error('Invalid or duplicate action');
@@ -112,12 +113,13 @@ export function pilotManifestHash(manifest: PilotAppManifest): ccc.Hex {
 }
 export function createPilotGrant(manifest: PilotAppManifest, selected: readonly string[]): PilotDelegationGrant {
   const manifestHash = pilotManifestHash(manifest);
+  if (selected.length > MAX_DELEGATED_ACTIONS) throw new Error(`Select at most ${MAX_DELEGATED_ACTIONS} delegated actions`);
   if (new Set(selected).size !== selected.length || selected.some(id => !manifest.actions.some(action => action.id === id && action.delegation !== 'owner-only'))) throw new Error('Unknown, owner-only, or duplicate selected permission');
   // Empty selection connects the account without funding or delegating anything.
   return { version: 2, manifestHash, permissions: [...selected].sort() };
 }
 export function assertPilotPermission(manifest: PilotAppManifest, grant: PilotDelegationGrant, id: string): void {
-  if (grant.version !== 2 || grant.manifestHash !== pilotManifestHash(manifest) || !grant.permissions.includes(id)
+  if (grant.version !== 2 || grant.manifestHash !== pilotManifestHash(manifest) || grant.permissions.length > MAX_DELEGATED_ACTIONS || !grant.permissions.includes(id)
     || new Set(grant.permissions).size !== grant.permissions.length
     || grant.permissions.some(id => !manifest.actions.some(action => action.id === id && action.delegation !== 'owner-only'))) throw new Error('Action is outside the approved Pilot grant; fresh consent is required');
 }

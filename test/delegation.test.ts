@@ -19,6 +19,24 @@ const lock = delegationLock(definition.manifest, grant, owner, publicKey);
 const point = { txHash: hash(4), index: 0 };
 const input = ccc.Cell.from({ outPoint: point, cellOutput: { lock, capacity: ccc.fixedPointFrom(350) + 2_000_000n }, outputData: definition.encodeState({ position: 5 }) });
 const session: Session = { id: 'delegation-test', network: 'ckb-testnet', policyVersion: 'delegation-v1', expiresAt: Date.now() + 60_000 };
+test('a 50-action catalog permits any selected 16, rejects over-cap grants and keeps unselected actions unauthorized', () => {
+  const manifest = structuredClone(definition.manifest);
+  manifest.actions = Array.from({ length: 50 }, (_, i) => ({ ...manifest.actions[0]!, id: `game.action${i}`, delegation: 'allowed' as const }));
+  const selected = manifest.actions.slice(-16).map(action => action.id);
+  const subset = createPilotGrant(manifest, selected);
+  assert.equal(subset.permissions.length, 16);
+  assertPilotPermission(manifest, subset, 'game.action49');
+  assert.throws(() => assertPilotPermission(manifest, subset, 'game.action0'), /outside/);
+  assert.doesNotThrow(() => delegationLock(manifest, subset, owner, publicKey));
+  assert.throws(() => createPilotGrant(manifest, [...selected, 'game.action0']), /at most 16/);
+  const forged = { ...subset, permissions: [...selected, 'game.action0'] };
+  assert.throws(() => assertPilotPermission(manifest, forged, 'game.action49'), /outside/);
+  assert.throws(() => delegationLock(manifest, forged, owner, publicKey), /outside/);
+  manifest.actions[0]!.delegation = 'owner-only';
+  assert.throws(() => createPilotGrant(manifest, ['game.action0']), /owner-only/);
+  manifest.actions.push({ ...manifest.actions[1]!, id: 'game.action50' });
+  assert.throws(() => pilotManifestHash(manifest), /1 and 50/);
+});
 function move() { return ccc.Transaction.from({ inputs: [{ previousOutput: point }], outputs: [{ ...input.cellOutput, capacity: input.cellOutput.capacity - 100_000n }],
   outputsData: [definition.encodeState({ position: 6 })], cellDeps: [{ outPoint: deployment.outPoint, depType: 'code' }] }); }
 

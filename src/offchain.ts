@@ -2,6 +2,7 @@ import { ccc } from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { verifyWalletIdentity } from './wallet-identity.js';
 import type { PilotNetwork } from './usernames.js';
+import { MAX_ACTION_CATALOG, MAX_OFFCHAIN_PERMISSIONS } from './limits.js';
 
 export type OffchainJson = null | boolean | number | string | OffchainJson[] | { [key: string]: OffchainJson };
 export interface OffchainManifest {
@@ -67,7 +68,7 @@ export function validateOffchainManifest(manifest: OffchainManifest): void {
   fail(manifest && identifier(manifest.appId) && typeof manifest.name === 'string' && manifest.name.length > 0 && manifest.name.length <= 120, 'Invalid off-chain app');
   const url = new URL(manifest.audience);
   fail(url.origin === manifest.audience && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))), 'Audience must be an exact HTTPS origin (HTTP allowed on localhost)');
-  fail(Array.isArray(manifest.actions) && manifest.actions.length > 0 && manifest.actions.length <= 32, 'Declare 1–32 off-chain actions');
+  fail(Array.isArray(manifest.actions) && manifest.actions.length > 0 && manifest.actions.length <= MAX_ACTION_CATALOG, `Declare 1–${MAX_ACTION_CATALOG} off-chain actions`);
   const ids = new Set<string>();
   for (const action of manifest.actions) {
     fail(action && identifier(action.id) && !ids.has(action.id) && typeof action.name === 'string' && action.name.length > 0 && action.name.length <= 120
@@ -100,7 +101,7 @@ function checkGrant(grant: OffchainGrant, manifest: OffchainManifest, now: numbe
   fail(timestamp(grant.issuedAt) && timestamp(grant.expiresAt) && grant.issuedAt <= now && now < grant.expiresAt
     && grant.expiresAt > grant.issuedAt && grant.expiresAt - grant.issuedAt <= MAX_GRANT_MS, 'Delegation expired or has invalid lifetime');
   fail(grant.owner && ['ckb-testnet', 'ckb-mainnet'].includes(grant.owner.network), 'Invalid owner network');
-  fail(Array.isArray(grant.permissions) && grant.permissions.length > 0 && new Set(grant.permissions).size === grant.permissions.length
+  fail(Array.isArray(grant.permissions) && grant.permissions.length > 0 && grant.permissions.length <= MAX_OFFCHAIN_PERMISSIONS && new Set(grant.permissions).size === grant.permissions.length
     && grant.permissions.every(id => manifest.actions.some(action => action.id === id)), 'Invalid delegated permissions');
   fail(typeof grant.sessionPublicKey === 'string' && /^0x(02|03)[a-f0-9]{64}$/.test(grant.sessionPublicKey), 'Invalid session public key');
   secp256k1.Point.fromBytes(ccc.bytesFrom(grant.sessionPublicKey));
@@ -109,6 +110,7 @@ export async function authorizeOffchain(owner: ccc.Signer, manifest: OffchainMan
   selected: readonly string[]; sessionPublicKey: ccc.Hex; expiresAt: number; now?: number;
 }): Promise<OffchainAuthorization> {
   validateOffchainManifest(manifest);
+  fail(options.selected.length <= MAX_OFFCHAIN_PERMISSIONS, `Select at most ${MAX_OFFCHAIN_PERMISSIONS} off-chain actions`);
   const now = options.now ?? Date.now();
   const grant: OffchainGrant = { version: 1, id: crypto.randomUUID(), manifestHash: offchainManifestHash(manifest), appId: manifest.appId,
     audience: manifest.audience, owner: { ownerAddress: await owner.getRecommendedAddress(), identity: await owner.getIdentity(), signType: owner.signType,

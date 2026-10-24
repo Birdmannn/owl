@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { ccc } from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { authorizeOffchain, PilotOffchainSession, verifyOffchainAction, acceptOffchainAction, revokeOffchain, acceptOffchainRevocation,
-  offchainGrantMessage, offchainCanonical, validateOffchainManifest } from '../src/offchain.js';
+  offchainGrantMessage, offchainCanonical, validateOffchainManifest, verifyOffchainAuthorization } from '../src/offchain.js';
 import { socialManifest } from '../examples/offchain-social.js';
 import { JsonSocialStore, createSocialServer } from '../server/offchain-social.js';
 
@@ -14,6 +14,29 @@ const manifest = socialManifest('https://social.pilot.test');
 const privateKey = ('0x' + '22'.repeat(32)) as ccc.Hex;
 const publicKey = ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(privateKey), true));
 const wallet = (value = '11') => new ccc.SignerCkbPrivateKey(new ccc.ClientPublicTestnet(), `0x${value.repeat(32)}`);
+test('a 50-action off-chain catalog signs only a chosen 32 and rejects larger grants before owner approval', async () => {
+  const catalog = structuredClone(manifest);
+  catalog.actions = Array.from({ length: 50 }, (_, i) => ({ id: `social.action${i}`, name: `Action ${i}`, description: `Perform action ${i}` }));
+  validateOffchainManifest(catalog);
+  const selected = catalog.actions.slice(-32).map(action => action.id);
+  const owner = wallet();
+  let calls = 0;
+  const sign = owner.signMessage.bind(owner);
+  owner.signMessage = async message => { calls++; return sign(message); };
+  const options = { selected, sessionPublicKey: publicKey, expiresAt: Date.now() + 60_000 };
+  const authorization = await authorizeOffchain(owner, catalog, options);
+  const pilot = await PilotOffchainSession.create(authorization, catalog, privateKey);
+  await verifyOffchainAction(pilot.sign({ id: 'social.action49', target: 'post', payload: {} }), catalog);
+  assert.throws(() => pilot.sign({ id: 'social.action0', target: 'post', payload: {} }), /permission/);
+  await assert.rejects(authorizeOffchain(owner, catalog, { ...options, selected: [...selected, 'social.action0'] }), /at most 32/);
+  assert.equal(calls, 1);
+  const forged = structuredClone(authorization);
+  forged.grant.permissions.push('social.action0');
+  forged.proof = await owner.signMessage(offchainGrantMessage(forged.grant));
+  await assert.rejects(verifyOffchainAuthorization(forged, catalog), /permissions/);
+  catalog.actions.push({ id: 'social.action50', name: 'Extra', description: 'Over the catalog limit' });
+  assert.throws(() => validateOffchainManifest(catalog), /1–50/);
+});
 async function setup(selected = ['social.like', 'social.post']) {
   const owner = wallet();
   const authorization = await authorizeOffchain(owner, manifest, { selected, sessionPublicKey: publicKey, expiresAt: Date.now() + 3_600_000 });

@@ -14,7 +14,7 @@ test('developer manifest renders independent named permissions and declining cre
   } })) });
   await panel.getByRole('button', { name: 'Connect through Pilot' }).click();
   const dialog = page.getByRole('dialog', { name: 'Sign these on my behalf' });
-  await expect(dialog.getByRole('checkbox')).toHaveCount(2);
+  await expect(dialog.getByRole('checkbox')).toHaveCount(3);
   await dialog.getByRole('spinbutton',{name:'Your action budget'}).fill('7');
   await dialog.getByText('Inspect app manifest',{exact:true}).click();
   await expect(dialog.locator('.manifest-details pre')).toContainText('"budget": "700000"');
@@ -23,7 +23,7 @@ test('developer manifest renders independent named permissions and declining cre
   await expect(forward).not.toBeChecked(); await expect(backward).not.toBeChecked();
   await forward.check(); await expect(forward).toBeChecked(); await expect(backward).not.toBeChecked();
   await backward.check(); await forward.uncheck(); await expect(backward).toBeChecked();
-  await expect(dialog.getByRole('checkbox', { name: /Jump/ })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: /Jump/ })).toBeDisabled();
   await dialog.getByRole('button', { name: 'Continue without automatic signing' }).click();
   await expect(dialog).not.toBeVisible();
   const funded = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('pilot:cell-delegation:') && /:(session|setup|settlement)$/.test(key)));
