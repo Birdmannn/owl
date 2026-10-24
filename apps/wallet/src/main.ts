@@ -128,6 +128,8 @@ if (embedded) {
 let cancelOwnerReview: (() => void) | undefined;
 let activeRequestId: string | undefined;
 function notifyProgress(phase: "waiting-for-user" | "processing") {
+  // Older SDKs treat any matching-ID envelope as a response. Never send new events without opt-in.
+  if (params.get("progress") !== "1") return;
   const id = activeRequestId ?? pendingConnect?.envelope.id;
   if (peer && id) peer.postMessage({ protocol: PILOT_WALLET_PROTOCOL, channel, id, method: "progress", params: {phase} }, appOrigin);
 }

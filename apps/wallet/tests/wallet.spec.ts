@@ -547,6 +547,10 @@ test("user wait time does not expire connect or approval; processing timeouts re
   await expect(page.frameLocator('iframe').getByText('Waiting for user')).toBeVisible();
   const frame=page.frames().find(f=>f.url().includes('/timeout-fixture'))!;
   await frame.waitForFunction(()=>!!(window as any).requests?.connect);
+  // A new event type from the real wallet must not resolve an older request type.
+  await frame.evaluate(()=>{
+    const w=window as any; w.reply(w.requests.connect.id,'future-event');
+  });
   await page.clock.fastForward(300_001);
   expect(await page.evaluate(()=>(window as any).pilotTestProvider.pending.size)).toBe(1);
   await frame.evaluate(()=>{
@@ -576,4 +580,22 @@ test("user wait time does not expire connect or approval; processing timeouts re
   });
   await page.clock.fastForward(300_001);
   expect(await page.evaluate(()=>(window as any).result)).toContain('same action request ID');
+});
+
+test("wallet sign-in does not send progress responses to an older SDK without opt-in", async ({page,context}) => {
+  await page.goto('http://localhost:5177/tests/legacy-app.html');
+  let wallet=await enterPilot(page);
+  let frame=page.frames().find(f=>f.url().startsWith('http://localhost:5176/'))!;
+  await authenticator(context,frame);
+  await wallet.getByLabel('Account name',{exact:true}).fill('Legacy account');
+  await wallet.getByRole('button',{name:'Create Pilot passkey',exact:true}).click();
+  await expect(wallet.locator('#status')).toContainText('Passkey created');
+  await page.reload();
+  wallet=await enterPilot(page);
+  frame=page.frames().find(f=>f.url().startsWith('http://localhost:5176/'))!;
+  await wallet.getByLabel('Pilot account').selectOption({index:1});
+  await wallet.getByRole('button',{name:'Sign in with passkey',exact:true}).click();
+  await expect(wallet.locator('#status')).toContainText('Passkey verified');
+  await expect(page.locator('#error')).toHaveText('');
+  expect(await page.evaluate(()=>(window as any).progressEvents)).toBe(0);
 });

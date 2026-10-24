@@ -115,7 +115,7 @@ export class PilotWalletProvider {
       return;
     }
     const p = this.pending.get(v.id);
-    if (!p) return;
+    if (!p || v.method !== p.method) return;
     if (this.approvalRequest?.id === v.id) {
       const { opened } = this.approvalRequest;
       this.approvalRequest = undefined;
@@ -200,6 +200,7 @@ export class PilotWalletProvider {
     url.searchParams.set("appOrigin", location.origin);
     url.searchParams.set("channel", this.channel);
     url.searchParams.set("embed", "1");
+    url.searchParams.set("progress", "1");
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.ready = undefined;
@@ -227,6 +228,8 @@ export class PilotWalletProvider {
       request,
     )) as PilotWalletConnection;
     if (
+      !connection ||
+      typeof connection !== "object" ||
       connection.appOrigin !== location.origin ||
       connection.expiresAt <= Date.now()
     )

@@ -1,0 +1,23 @@
+<!doctype html><p id="error"></p><script>
+    const channel=crypto.randomUUID(), wallet=document.createElement('iframe');
+    wallet.src='http://localhost:5176/?embed=1&appOrigin='+encodeURIComponent(location.origin)+'&channel='+channel;
+    wallet.allow='publickey-credentials-create http://localhost:5176; publickey-credentials-get http://localhost:5176';
+    wallet.style='width:510px;height:650px';
+    let pending=false; window.progressEvents=0;
+    addEventListener('message',event=>{
+      if(event.source!==wallet.contentWindow || event.origin!=='http://localhost:5176' || event.data.channel!==channel)return;
+      const r=event.data;
+      if(r.method==='ready'){
+        pending=true;
+        wallet.contentWindow.postMessage({protocol:'owl-pilot-wallet-v1',channel,id:'legacy-connect',method:'connect',params:{name:'Legacy app',budget:'1000000000',policies:[{name:'Like',direction:'message',lockHash:'0x'+'01'.repeat(32),typeHash:'0x'+'00'.repeat(32),dataHash:'0x'+'00'.repeat(32),maxCapacity:'1'}]}},'http://localhost:5176');
+      }
+      if(r.method==='progress')window.progressEvents++;
+      // Reproduce the previous SDK's matching-ID behavior, including the reported exception.
+      if(pending && r.id==='legacy-connect'){
+        pending=false;
+        try { window.resultOrigin=r.result.appOrigin; }
+        catch(e){ document.querySelector('#error').textContent=e.message; }
+      }
+    });
+    document.body.append(wallet);
+  </script>
