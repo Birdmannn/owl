@@ -742,3 +742,83 @@ test("embedded assertions bind the signed top origin and preserve legacy account
   assert.equal(pilotPasskeyLock(parsePilotPasskey(originalDescriptor)).codeHash, PILOT_LEGACY_PASSKEY_CODE_HASH);
   assert.notEqual(pilotPasskeyLock(old).hash(), pilotPasskeyLock(passkey).hash());
 });
+
+test("one-time passkey transaction approval preserves the session and journals exact retries", async (t) => {
+  const f = await fixture(t);
+  let reviews = 0;
+  f.options.approveOnce = async review => {
+    assert.equal(review.kind, "transaction");
+    if (review.kind === "transaction") {
+      const tx = ccc.Transaction.fromBytes(review.bytes);
+      assert.equal(tx.getWitnessArgs(0)?.lock, "0x00");
+      assert.equal(review.remaining, ccc.fixedPointFrom(139).toString());
+    }
+    reviews++;
+    return true;
+  };
+  const destination = f.recipient.clone(); destination.args = ccc.hexFrom(new Uint8Array(20).fill(77));
+  const tx = await f.session.prepareAppTransaction({ outputs: [{ lock: destination, capacity: ccc.fixedPointFrom(61) }], outputsData: ["0x"] });
+  assert.equal(reviews, 0, "preparation never signs or prompts");
+  const hash = await f.session.sendTransaction(tx, "manual-1");
+  assert.equal(reviews, 1);
+  assert.equal(f.signs, 2);
+  assert.equal(f.journal.receipts.at(-1)!.approval, "passkey");
+  assert.equal(f.journal.stopped, false);
+  await f.session.resume();
+  assert.deepEqual(f.journal.state!.policies, f.state.policies);
+  assert.equal(f.journal.state!.publicKey, f.state.publicKey);
+  assert.equal(await f.session.sendTransaction(tx, "manual-1"), hash);
+  assert.equal(reviews, 1, "exact retry does not ask again");
+  await f.session.sendTransaction(await f.payment(), "automatic-after-manual");
+  assert.equal(f.signs, 2, "later selected actions remain automatic");
+});
+
+test("cancelled one-time actions leave the connection, authority and receipts intact", async (t) => {
+  const f = await fixture(t);
+  f.options.approveOnce = async () => false;
+  const tx = await f.payment(); tx.outputs[0]!.lock.args = ccc.hexFrom(new Uint8Array(20).fill(77));
+  await assert.rejects(f.session.sendTransaction(tx, "cancelled"), /cancelled/);
+  await assert.rejects(f.session.signScopedMessage("social.delete", "post:123", "cancel_nonce_12345678"), /cancelled/);
+  assert.equal(f.signs, 1);
+  assert.equal(f.journal.receipts.length, 1);
+  assert.equal(f.journal.messages?.length ?? 0, 0);
+  assert.equal(f.journal.stopped, false);
+  assert.deepEqual(f.journal.state, f.state);
+});
+
+test("one-time review cannot bypass budget, authority integrity or select recovery funds", async (t) => {
+  const f = await fixture(t);
+  let reviews = 0;
+  f.options.approveOnce = async () => { reviews++; return true; };
+  const tx = await f.payment(); tx.outputs[0]!.lock.args = ccc.hexFrom(new Uint8Array(20).fill(77));
+  const raised = tx.clone();
+  raised.outputsData[1] = encodePilotWalletState({ ...f.state, remaining: ccc.fixedPointFrom(300).toString(), sequence: "1" });
+  await assert.rejects(f.session.sendTransaction(raised, "raise"), /budget\/sequence/);
+  const drained = tx.clone();
+  drained.outputs[0]!.capacity += ccc.fixedPointFrom(150);
+  drained.outputs[1]!.capacity -= ccc.fixedPointFrom(150);
+  await assert.rejects(f.session.sendTransaction(drained, "drain"), /budget exceeded/);
+  const proof = f.cells.find(c => c.cellOutput.lock.eq(f.account.ownerLock))!;
+  const ownerInput = tx.clone(); ownerInput.inputs.push(ccc.CellInput.from({previousOutput: proof.outPoint}));
+  await assert.rejects(f.session.sendTransaction(ownerInput, "owner-input"), /recovery-owner inputs/);
+  assert.equal(reviews, 0);
+  assert.equal(f.signs, 1);
+});
+
+test("unselected messages use an owner-bound proof; edits, wrong owner and revocation fail", async (t) => {
+  const f = await fixture(t);
+  f.options.approveOnce = async review => { assert.equal(review.kind, "message"); return true; };
+  const value = await f.session.signScopedMessage("social.delete", "post:123", "manual_nonce_12345678");
+  assert.equal(value.version, 2);
+  const expected = { appOrigin: f.state.appOrigin, scope: value.scope, nonce: value.nonce };
+  assert.equal(await verifyPilotScopedMessage(f.client, f.account, f.state, value, expected), true);
+  assert.equal(await verifyPilotScopedMessage(f.client, f.account, f.state, { ...value, message: "post:456" }, expected), false);
+  if (value.version !== 2) throw new Error("Expected owner proof");
+  const impostor = { ...value, passkey: { ...value.passkey, publicKey: ccc.hexFrom(p256.getPublicKey(ccc.bytesFrom(h(4)), true)) } };
+  assert.equal(await verifyPilotScopedMessage(f.client, f.account, f.state, impostor, expected), false);
+  await assert.rejects(f.session.signScopedMessage(value.scope, "post:456", value.nonce), /reused/);
+  assert.equal(f.signs, 2);
+  assert.deepEqual(f.journal.state!.policies, f.state.policies);
+  await f.session.revoke();
+  assert.equal(await verifyPilotScopedMessage(f.client, f.account, f.state, value, expected), false);
+});

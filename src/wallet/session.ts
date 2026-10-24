@@ -10,6 +10,10 @@ import {
   PilotPasskeySigner,
   canonicalWalletOrigin,
   walletU64,
+  pilotPasskeyLock,
+  verifyPilotAssertion,
+  type PilotPasskey,
+  type PilotAssertion,
 } from "./passkey.js";
 import {
   PILOT_WALLET_SESSION_CODE_HASH,
@@ -229,12 +233,15 @@ function permitted(
       output.capacity <= BigInt(p.maxCapacity),
   );
 }
+export class PilotPolicyApprovalRequiredError extends Error {}
+
 /** Mirrors consensus checks before asking for sponsorship. Does not replace CKB script validation. */
 export async function validatePilotWalletEffects(
   client: ccc.Client,
   account: PilotWalletDescriptor,
   state: PilotWalletState,
   tx: ccc.Transaction,
+  ownerApproved = false,
 ): Promise<{ index: number; next: PilotWalletState }> {
   const lock = pilotWalletLock(account),
     type = ccc.Script.from(account.stateType);
@@ -250,6 +257,8 @@ export async function validatePilotWalletEffects(
     points.add(point);
     const cell = await client.getCellLive(v.previousOutput, true);
     if (!cell) throw new Error("Wallet input is not live");
+    if (cell.cellOutput.lock.eq(account.ownerLock))
+      throw new Error("Apps cannot select recovery-owner inputs");
     if (cell.cellOutput.lock.eq(account.poolLock))
       throw new Error("Apps cannot select pool inputs");
     if (
@@ -272,9 +281,10 @@ export async function validatePilotWalletEffects(
       if (
         !cell.cellOutput.type?.eq(type) &&
         (cell.cellOutput.type || cell.outputData !== "0x") &&
+        !ownerApproved &&
         !permitted(state, cell.cellOutput, cell.outputData, "input")
       )
-        throw new Error("Account asset input is outside session policies");
+        throw new PilotPolicyApprovalRequiredError("Account asset input is outside session policies");
     }
   }
   for (const [i, o] of tx.outputs.entries()) {
@@ -297,8 +307,8 @@ export async function validatePilotWalletEffects(
       if (o.type?.eq(type)) continue;
       if (!o.type && data === "0x") continue;
     }
-    if (!permitted(state, o, data, "output"))
-      throw new Error("Output is outside session policies");
+    if (!ownerApproved && !permitted(state, o, data, "output"))
+      throw new PilotPolicyApprovalRequiredError("Output is outside session policies");
   }
   if (anchorIn < 0 || anchorOut < 0)
     throw new Error(
@@ -325,6 +335,7 @@ export interface PilotWalletReceipt {
   status: "signed" | "submitted" | "confirmed" | "requote";
   kind: "grant" | "action" | "revoke" | "recover";
   next?: PilotWalletState;
+  approval?: "passkey";
   createdAt: number;
 }
 export interface PilotWalletJournal {
@@ -344,7 +355,13 @@ export interface PilotWalletJournalStore {
   load(): Promise<PilotWalletJournal | undefined>;
   save(value: PilotWalletJournal): Promise<void>;
 }
+export type PilotOwnerActionReview =
+  | { kind: "transaction"; appOrigin: string; bytes: ccc.Hex; requestId: string; remaining: string; fee: string }
+  | { kind: "message"; appOrigin: string; scope: string; message: string; nonce: string };
+
 export interface PilotWalletOptions {
+  /** Trusted wallet UI only. Never supply this callback from app-controlled code. */
+  approveOnce?: (review: PilotOwnerActionReview) => Promise<boolean>;
   owner: PilotPasskeySigner;
   account: PilotWalletDescriptor;
   paymaster: FeeSponsor;
@@ -360,6 +377,7 @@ export async function buildPilotWalletTransaction(
   account: PilotWalletDescriptor,
   state: PilotWalletState,
   value: ccc.TransactionLike,
+  allowOwnerReview = false,
 ): Promise<ccc.Transaction> {
   const tx = ccc.Transaction.from(value).clone(),
     lock = pilotWalletLock(account),
@@ -434,7 +452,7 @@ export async function buildPilotWalletTransaction(
   };
   tx.outputs.push(successor);
   tx.outputsData.push(encodePilotWalletState(next));
-  await validatePilotWalletEffects(client, account, state, tx);
+  await validatePilotWalletEffects(client, account, state, tx, allowOwnerReview);
   return tx;
 }
 /** Trusted-wallet implementation. Never instantiate this with keys in an integrating app. */
@@ -560,6 +578,7 @@ export class PilotWalletSession extends ccc.Signer {
         this.options.account,
         j.state,
         value,
+        !!this.options.approveOnce,
       );
       return this.prepareTransaction(tx);
     });
@@ -690,12 +709,21 @@ export class PilotWalletSession extends ccc.Signer {
           ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(this.#key), true))
       )
         throw new Error("Session belongs to another key or app");
-      const checked = await validatePilotWalletEffects(
-        this.client,
-        this.options.account,
-        state,
-        tx,
-      );
+      let ownerApproval = false;
+      let checked;
+      try {
+        checked = await validatePilotWalletEffects(this.client, this.options.account, state, tx);
+      } catch (error) {
+        if (!(error instanceof PilotPolicyApprovalRequiredError) || !this.options.approveOnce) throw error;
+        // Policy mismatch alone can request owner review. All structural/budget checks still apply.
+        checked = await validatePilotWalletEffects(this.client, this.options.account, state, tx, true);
+        ownerApproval = true;
+        await this.ownerProof(tx);
+        tx.setWitnessArgs(checked.index, { ...tx.getWitnessArgs(checked.index), lock: "0x00" });
+        const prepared = await this.options.owner.prepareTransaction(tx);
+        tx.cellDeps = prepared.cellDeps;
+        tx.witnesses = prepared.witnesses;
+      }
       const quote = await this.options.paymaster.prepare(tx.clone());
       const signed = await verifySponsorQuote(
         this.client,
@@ -704,15 +732,21 @@ export class PilotWalletSession extends ccc.Signer {
         this.options.account.poolLock,
         BigInt(this.options.account.maxFee),
       );
-      const signature = secp256k1.sign(
-        ccc.bytesFrom(pilotWalletDigest(signed, checked.index)),
-        ccc.bytesFrom(this.#key),
-        { prehash: false },
-      );
-      signed.setWitnessArgs(checked.index, {
-        ...signed.getWitnessArgs(checked.index),
-        lock: ccc.hexFrom(ccc.bytesConcat([1], signature)),
-      });
+      if (ownerApproval) {
+        if (!(await this.options.approveOnce!({ kind: "transaction", appOrigin: this.options.appOrigin,
+          bytes: ccc.hexFrom(signed.toBytes()), requestId, remaining: checked.next.remaining, fee: quote.fee })))
+          throw new Error("One-time approval cancelled");
+        const approved = await this.options.owner.signOnlyTransaction(signed);
+        if (approved.hash() !== signed.hash()) throw new Error("Owner changed reviewed transaction");
+        signed.witnesses = approved.witnesses;
+      } else {
+        const signature = secp256k1.sign(
+          ccc.bytesFrom(pilotWalletDigest(signed, checked.index)),
+          ccc.bytesFrom(this.#key), { prehash: false },
+        );
+        signed.setWitnessArgs(checked.index, { ...signed.getWitnessArgs(checked.index),
+          lock: ccc.hexFrom(ccc.bytesConcat([1], signature)) });
+      }
       const r: PilotWalletReceipt = {
         id: requestId,
         requestHash,
@@ -721,6 +755,7 @@ export class PilotWalletSession extends ccc.Signer {
         quote,
         status: "signed",
         kind: "action",
+        ...(ownerApproval ? { approval: "passkey" as const } : {}),
         next: checked.next,
         createdAt: Date.now(),
       };
@@ -865,18 +900,17 @@ export class PilotWalletSession extends ccc.Signer {
         state.publicKey !==
           ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(this.#key), true)) ||
         !anchor ||
-        anchor.outputData !== encodePilotWalletState(state) ||
-        !state.policies.some(
-          (p) =>
-            p.direction === "message" &&
-            p.lockHash === ccc.hashCkb(ccc.bytesFrom(scope, "utf8")),
-        )
+        anchor.outputData !== encodePilotWalletState(state)
       )
         throw new Error(
           "Message scope is not authorized by the current on-chain session",
         );
+      const automatic = state.policies.some(p => p.direction === "message" &&
+        p.lockHash === ccc.hashCkb(ccc.bytesFrom(scope, "utf8")));
+      if (!automatic && !this.options.approveOnce)
+        throw new Error("Message scope is not authorized by the current on-chain session");
       const value = {
-        version: 1 as const,
+        version: automatic ? 1 as const : 2 as const,
         accountHash: this.lock.hash(),
         appOrigin: this.options.appOrigin,
         publicKey: state.publicKey,
@@ -886,14 +920,20 @@ export class PilotWalletSession extends ccc.Signer {
         expiresAt: this.options.expiresAt,
       };
       const hash = scopedMessageDigest(value);
-      const signature = ccc.hexFrom(
-        secp256k1.sign(ccc.bytesFrom(hash), ccc.bytesFrom(this.#key), {
-          prehash: false,
-        }),
-      );
       const old = j.messages?.find((m) => m.id === nonce);
       if (old && old.hash !== hash)
         throw new Error("Message nonce reused with different effects");
+      let proof: Pick<PilotSessionMessage, "signature"> | Pick<PilotOwnerMessage, "passkey" | "assertion">;
+      if (automatic) {
+        proof = { signature: ccc.hexFrom(secp256k1.sign(ccc.bytesFrom(hash), ccc.bytesFrom(this.#key), { prehash: false })) };
+      } else {
+        if (!(await this.options.approveOnce!({kind: "message", appOrigin: this.options.appOrigin, scope, message, nonce})))
+          throw new Error("One-time approval cancelled");
+        const assertion = await this.options.owner.assert(hash);
+        if (!verifyPilotAssertion(this.options.owner.passkey, hash, assertion))
+          throw new Error("Invalid one-time owner assertion");
+        proof = { passkey: this.options.owner.passkey, assertion };
+      }
       if (!old)
         (j.messages ??= []).push({
           id: nonce,
@@ -903,7 +943,7 @@ export class PilotWalletSession extends ccc.Signer {
           createdAt: Date.now(),
         });
       await this.options.journal.save(j);
-      return { ...value, signature };
+      return { ...value, ...proof } as PilotScopedMessage;
     });
   }
   private async anchor(): Promise<ccc.Cell | undefined> {
@@ -1029,8 +1069,8 @@ export class PilotWalletSession extends ccc.Signer {
   }
 }
 
-export interface PilotScopedMessage {
-  version: 1;
+interface PilotMessageFields {
+  version: 1 | 2;
   accountHash: ccc.Hex;
   appOrigin: string;
   publicKey: ccc.Hex;
@@ -1038,10 +1078,13 @@ export interface PilotScopedMessage {
   message: string;
   nonce: string;
   expiresAt: number;
-  signature: ccc.Hex;
 }
+export interface PilotSessionMessage extends PilotMessageFields { version: 1; signature: ccc.Hex }
+/** One action authorized by the recovery passkey, without adding a session permission. */
+export interface PilotOwnerMessage extends PilotMessageFields { version: 2; passkey: PilotPasskey; assertion: PilotAssertion }
+export type PilotScopedMessage = PilotSessionMessage | PilotOwnerMessage;
 function scopedMessageDigest(
-  value: Omit<PilotScopedMessage, "signature">,
+  value: PilotMessageFields,
 ): ccc.Hex {
   return ccc.hashCkb(
     ccc.bytesFrom(
@@ -1070,7 +1113,7 @@ export async function verifyPilotScopedMessage(
 ): Promise<boolean> {
   try {
     if (
-      value.version !== 1 ||
+      ![1, 2].includes(value.version) ||
       value.accountHash !== pilotWalletLock(account).hash() ||
       value.appOrigin !== expected.appOrigin ||
       state.appOrigin !== expected.appOrigin ||
@@ -1078,11 +1121,10 @@ export async function verifyPilotScopedMessage(
       value.nonce !== expected.nonce ||
       value.expiresAt <= (expected.now ?? Date.now()) ||
       value.publicKey !== state.publicKey ||
-      !state.policies.some(
-        (p) =>
-          p.direction === "message" &&
+      (value.version === 1 && !state.policies.some(
+        (p) => p.direction === "message" &&
           p.lockHash === ccc.hashCkb(ccc.bytesFrom(value.scope, "utf8")),
-      )
+      ))
     )
       return false;
     await verifyDeployment(client, account.deployment);
@@ -1100,6 +1142,9 @@ export async function verifyPilotScopedMessage(
         break;
       }
     if (!live) return false;
+    if (value.version === 2)
+      return pilotPasskeyLock(value.passkey).eq(account.ownerLock) &&
+        verifyPilotAssertion(value.passkey, scopedMessageDigest(value), value.assertion);
     return secp256k1.verify(
       ccc.bytesFrom(value.signature),
       ccc.bytesFrom(scopedMessageDigest(value)),

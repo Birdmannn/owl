@@ -54,6 +54,7 @@ export class PilotWalletProvider {
       resolve: (v: unknown) => void;
       reject: (e: Error) => void;
       timer: ReturnType<typeof setTimeout>;
+      method: string;
     }
   >();
   private ready?: () => void;
@@ -61,6 +62,7 @@ export class PilotWalletProvider {
   private connection?: PilotWalletConnection;
   readonly origin: string;
   private disposed = false;
+  private approvalRequest?: { id: string; opened: boolean };
   constructor(
     readonly options: { url: string; timeoutMs?: number; styleNonce?: string },
   ) {
@@ -87,12 +89,24 @@ export class PilotWalletProvider {
         this.dialog.style.setProperty("--pilot-height", `${height + 50}px`);
       return;
     }
+    if (v.method === "approval") {
+      const pending = this.pending.get(v.id);
+      if (!pending || !["send", "signMessage"].includes(pending.method)) return;
+      this.approvalRequest = { id: v.id, opened: !this.dialog?.open };
+      this.open();
+      return;
+    }
     if (v.method === "ready") {
       this.ready?.();
       return;
     }
     const p = this.pending.get(v.id);
     if (!p) return;
+    if (this.approvalRequest?.id === v.id) {
+      const { opened } = this.approvalRequest;
+      this.approvalRequest = undefined;
+      if (opened) this.hide();
+    }
     this.pending.delete(v.id);
     clearTimeout(p.timer);
     if (v.error) p.reject(new Error(v.error));
@@ -132,6 +146,7 @@ export class PilotWalletProvider {
     this.frame.allow = `publickey-credentials-create ${this.origin}; publickey-credentials-get ${this.origin}`;
     this.frame.referrerPolicy = "origin";
     this.frame.src = url.toString();
+    this.dialog.addEventListener("cancel", (event) => { event.preventDefault(); this.hide(); });
     this.dialog.append(header, this.frame);
     shadow.append(style, this.dialog);
     document.body.append(this.host);
@@ -145,6 +160,10 @@ export class PilotWalletProvider {
   }
   /** Hide the presentation only. Keep the isolated signer alive; this does not disconnect. */
   hide() {
+    if (this.approvalRequest) this.frame?.contentWindow?.postMessage({
+      protocol: PILOT_WALLET_PROTOCOL, channel: this.channel,
+      id: this.approvalRequest.id, method: "cancelApproval",
+    } satisfies PilotWalletEnvelope, this.origin);
     this.dialog?.close();
   }
   async connect(request: PilotWalletConnect): Promise<PilotWalletConnection> {
@@ -225,7 +244,7 @@ export class PilotWalletProvider {
           ),
         );
       }, this.options.timeoutMs ?? 300_000);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, method });
       this.frame!.contentWindow!.postMessage(
         {
           protocol: PILOT_WALLET_PROTOCOL,

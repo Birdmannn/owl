@@ -128,6 +128,8 @@ const assertOwner = (passkey: PilotPasskey, challenge: ccc.Hex) =>
   embedded && needsSafariAuth()
     ? topLevelAuth({ kind: "assert", passkey, challenge, appOrigin }) as Promise<PilotAssertion>
     : requestPilotAssertion(passkey, challenge, embedded ? appOrigin : undefined);
+let cancelOwnerReview: (() => void) | undefined;
+let activeRequestId: string | undefined;
 async function confirmReview(message: string): Promise<boolean> {
   const dialog = node("dialog");
   dialog.className = "owner-review";
@@ -137,10 +139,12 @@ async function confirmReview(message: string): Promise<boolean> {
   node("pre", message, dialog);
   return new Promise((resolve) => {
     const finish = (approved: boolean) => {
+      cancelOwnerReview = undefined;
       dialog.close();
       dialog.remove();
       resolve(approved);
     };
+    cancelOwnerReview = () => finish(false);
     const cancel = node("button", "Cancel", dialog);
     cancel.onclick = () => finish(false);
     const approve = node("button", "Confirm with passkey", dialog);
@@ -801,6 +805,14 @@ async function renderLogs(e = session) {
 function accountKey(p: PilotPasskey) {
   return "pilot:wallet:account:" + p.publicKey + ":testnet";
 }
+async function describeOwnerTransaction(bytes: ccc.Hex, remaining: string, fee: string) {
+  const tx = ccc.Transaction.fromBytes(bytes);
+  const inputs = await Promise.all(tx.inputs.map(async (input) => {
+    const cell = await client.getCell(input.previousOutput);
+    return { outPoint: input.previousOutput, capacity: cell?.cellOutput.capacity.toString(), lock: cell?.cellOutput.lock, type: cell?.cellOutput.type, data: cell?.outputData };
+  }));
+  return `Transaction: ${tx.hash()}\nSession budget after action: ${ccc.fixedPointToString(BigInt(remaining))} CKB\nSponsored fee: ${ccc.fixedPointToString(BigInt(fee))} CKB\nInputs and outputs (including sponsor and owner proof/change):\n${JSON.stringify({ inputs, outputs: tx.outputs.map((o, i) => ({ capacity: o.capacity.toString(), lock: o.lock, type: o.type, data: tx.outputsData[i] })) }, (_, v) => typeof v === "bigint" ? v.toString() : v, 2)}`;
+}
 function engine(
   owner: PilotPasskeySigner,
   account: PilotWalletDescriptor,
@@ -812,6 +824,14 @@ function engine(
   return new PilotWalletSession({
     owner,
     account,
+    approveOnce: async (review) => {
+      if (!activeRequestId) throw new Error("No active app action to approve");
+      const description = review.kind === "message"
+        ? `Scope: ${review.scope}\nMessage:\n${review.message}\nNonce: ${review.nonce}`
+        : await describeOwnerTransaction(review.bytes, review.remaining, review.fee);
+      peer?.postMessage({ protocol: PILOT_WALLET_PROTOCOL, channel, id: activeRequestId, method: "approval" }, appOrigin);
+      return confirmReview(`Approve this action once\nApp: ${review.appOrigin}\nAccount: ${pilotWalletLock(account).hash()}\n\n${description}\n\nYour existing session and permissions stay in place. This approval does not add automatic permissions.`);
+    },
     sessionKey: key,
     appOrigin: appOrigin || location.origin,
     expiresAt,
@@ -890,6 +910,10 @@ window.addEventListener("message", (event) => {
   )
     return;
   const request = event.data;
+  if (request.method === "cancelApproval") {
+    if (request.id === activeRequestId) cancelOwnerReview?.();
+    return;
+  }
   if (operation || busy) {
     reply(
       request,
@@ -941,6 +965,7 @@ window.addEventListener("message", (event) => {
     return;
   }
   operation = true;
+  activeRequestId = request.id;
   void (async () => {
     if (!session || !connection || connection.appOrigin !== event.origin)
       throw new Error("Approve this app session first");
@@ -1002,6 +1027,7 @@ window.addEventListener("message", (event) => {
     )
     .finally(() => {
       operation = false;
+      activeRequestId = undefined;
       void renderLogs();
       renderModal();
     });

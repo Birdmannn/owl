@@ -491,3 +491,39 @@ test('Safari uses a source-bound top-level ceremony and returns the public passk
   await expect(cancelled.locator('#error')).toContainText('authentication window closed');
   await expect(cancelled.locator('#accounts')).toBeVisible();
 });
+
+test("one-time approval reopens the existing frame and cancels without reconnecting", async ({ page }) => {
+  // Transport fixture only: signing and account checks are covered by wallet unit/WebAuthn tests.
+  await page.route('http://localhost:5176/approval-fixture*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><p>Connected account</p><script>
+    const q = new URLSearchParams(location.search), channel = q.get('channel'), origin = q.get('appOrigin');
+    const post = (id, method, result) => parent.postMessage({protocol:'owl-pilot-wallet-v1', channel, id, method, result}, origin);
+    window.addEventListener('message', event => {
+      if(event.source !== parent || event.origin !== origin || event.data.channel !== channel) return;
+      const r = event.data;
+      if(r.method === 'connect') post(r.id, r.method, {appOrigin:origin, expiresAt:Date.now()+60000});
+      if(r.method === 'signMessage') { window.active = r; post(r.id,'approval'); }
+      if(r.method === 'cancelApproval') post(r.id,'signMessage',{cancelled:true});
+    });
+    post('ready','ready');
+  </script>` }));
+  await page.goto('http://localhost:5177/tests/app.html?wallet=' + encodeURIComponent('http://localhost:5176/approval-fixture'));
+  await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();
+  await expect(page.locator('p').filter({hasText:'Connected'})).toBeVisible();
+  const dialog = page.getByRole('dialog', {name:'Pilot wallet',exact:true});
+  await expect(dialog).not.toBeVisible();
+  const frame = page.frames().find(f => f.url().includes('/approval-fixture'))!;
+  const originalUrl = frame.url();
+  await page.evaluate(() => {
+    const p = (window as any).pilotTestProvider;
+    (window as any).oneTimeResult = p.request('signMessage', {scope:'social.delete',message:'post:123',nonce:'one_time_nonce_12345'});
+  });
+  await expect(dialog).toBeVisible();
+  expect(page.frames().find(f => f.url() === originalUrl)).toBe(frame);
+  await expect(page.frameLocator('iframe').getByText('Connected account')).toBeVisible();
+  await page.getByRole('button', {name:'Close Pilot wallet'}).click();
+  await expect(dialog).not.toBeVisible();
+  expect(await page.evaluate(() => (window as any).oneTimeResult)).toEqual({cancelled:true});
+  await page.evaluate(() => (window as any).pilotTestProvider.open());
+  await expect(dialog).toBeVisible();
+  expect(page.frames().find(f => f.url() === originalUrl)).toBe(frame);
+});
