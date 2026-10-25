@@ -40,6 +40,24 @@ Investigate these requirements before selecting a hosted directory protocol:
 
 Publish a threat model and a supported-browser/device test matrix before choosing an implementation. A changed wallet domain is a changed WebAuthn RP/origin binding; do not treat changing a URL as credential migration. No directory API or schema is finalized by this section.
 
+## Shorter account addresses and lock redesign
+
+**Planned investigation; not implemented.** Current session-account lock arguments contain 104 bytes: the owner lock hash (32), authority TYPE_ID script hash (32), paymaster lock hash (32), and maximum sponsored fee (8). CKB addresses encode those arguments along with the lock code hash and hash type, making Pilot addresses long. Display truncation can improve readability but must preserve the complete address for copying and payments; it does not shorten the actual address.
+
+Investigate a revised lock whose arguments contain a compact, cryptographically bound account identifier or configuration commitment, with the remaining configuration stored in the authenticated authority/state cell. A 32-byte identifier is a candidate, not a finalized encoding or a promise to match another wallet’s address length. The design must specify how the lock finds and authenticates its authority without relying on an app, indexer or database to supply trusted configuration.
+
+Required properties:
+
+- Bind each account to its unique authority and verified owner. Reject a substituted authority, duplicate authority, another account’s state, or attacker-provided configuration, including when spending multiple account cells in one transaction.
+- Preserve owner-authorized recovery/revocation, session-key policy checks, cumulative spending allowance, successor sequence and protected occupied capacity. Define initial creation, replacement, revocation and final recovery explicitly, including spending asset cells after authority closure. Do not strand funds by deleting the only on-chain owner/recovery configuration.
+- Preserve per-transaction sponsorship: authenticate the configured pool and fee ceiling, prevent sponsor capacity becoming unrestricted user funds, and require owner approval for configuration changes that expand authority. Identify which fields are immutable commitments and which may change through a validated state transition.
+- Evaluate the storage tradeoff. Moving configuration into state may reduce repeated lock-argument capacity across account cells, but adds state data and validation work; measure net occupied capacity and execution cost. Textual address length alone does not determine network fees.
+- Introduce a versioned contract and descriptor format, update transaction builders, paymaster verification, address decoding, backups and recovery tools, and test both valid and adversarial transitions before deployment.
+
+This requires new contract deployment for the revised encoding. Existing addresses and funded cells cannot be shortened in place: retain compatible legacy recovery and use an explicit owner-authorized transfer/migration to a new account identity. Do not silently retarget usernames, balances, receipts or app ownership. Assets/contracts tied to the old identity may need their own transfer support; migration cannot promise automatic portability. Preserve the stable passkey origin and owner authentication throughout.
+
+Acceptance includes measured address-length/capacity comparisons, rejected configuration substitution and unauthorized updates, sponsor isolation, owner-only recovery without a session key, exact retry behavior, and a tested legacy-to-new migration path. Until this is implemented, keep the current full addresses valid and clearly distinguish optional UI abbreviation from an on-chain format change.
+
 ## Credentials and authority
 
 | Value | Visibility | Purpose |

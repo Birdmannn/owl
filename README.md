@@ -432,3 +432,5 @@ The wallet balance display now queries total capacity for the exact lock, includ
 In an embedded wallet, Copy address requests clipboard permission through the SDK iframe. A host permissions policy or browser can still block automatic copying; Pilot then selects the visible public address and asks you to copy it manually (Ctrl+C or ⌘C). This does not affect signing or funding.
 
 The embedded modal uses a borderless cross icon to close it, aligned with the content shell and labelled “Close Pilot wallet” for assistive technology. Closing hides the modal while retaining the connected signer.
+
+V2 plans a [shorter-address lock redesign](IMPLEMENTATION_V2.md#shorter-account-addresses-and-lock-redesign): investigate moving the current 104-byte session-lock configuration into authenticated state behind a compact account identifier/commitment. This is not implemented; it requires a new contract and explicit owner-authorized migration for existing funds. Address abbreviation in the UI does not change the full payment address.
