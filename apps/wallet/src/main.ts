@@ -517,12 +517,17 @@ const continueSession = button("Continue existing session", async () => {
     address: await session.getRecommendedAddress(), ownerAddress: await saved.owner.getRecommendedAddress(),
     account: session.options.account, appOrigin, expiresAt: saved.expiresAt,
   };
-  reply(approval.envelope, connection);
   pendingConnect = undefined;
   resumable = undefined;
   status.textContent = "Existing session resumed. Its remaining budget, permissions and expiry are unchanged.";
-  await renderLogs();
-  if (embedded) goTo("profile");
+  try {
+    await renderLogs();
+    if (embedded) goTo("profile");
+  } finally {
+    // No awaited UI work after this response: run() releases busy before the
+    // parent can receive it and immediately request logs/prepare/send.
+    reply(approval.envelope, connection);
+  }
 }, review);
 continueSession.className = "primary full";
 continueSession.hidden = true;
@@ -685,16 +690,19 @@ const grant = button(
           "pilot:wallet:active:" + pilotWalletLock(account).hash(),
           JSON.stringify({ expiresAt, appOrigin }),
         );
-        reply(approval.envelope, connection);
         pendingConnect = undefined;
         showOwner();
         status.textContent =
           "Session confirmed on-chain. You can close the modal. Pilot stays connected for approved actions.";
-        await renderLogs();
-        await refreshAvailableBalances().catch(() => {
-          profileBalance.textContent = "Session confirmed. Balance refresh unavailable; use Refresh balance to try again.";
-        });
-        if (embedded) goTo("profile");
+        try {
+          await renderLogs();
+          await refreshAvailableBalances().catch(() => {
+            profileBalance.textContent = "Session confirmed. Balance refresh unavailable; use Refresh balance to try again.";
+          });
+          if (embedded) goTo("profile");
+        } finally {
+          reply(approval.envelope, connection);
+        }
       },
     );
   },

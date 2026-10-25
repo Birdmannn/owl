@@ -1,3 +1,9 @@
+## Connect completion race (2026-10-25)
+
+User reports integrating-app error about another session/request ID. Exact text requested asynchronously, still awaiting confirmation. Found concrete race matching wallet's “Another wallet operation is in progress; retry with the same request ID”: initial/replacement grant replies connect then awaits renderLogs and remote refreshAvailableBalances while run() busy stays true. FON immediately requests logs after connect resolves, so it can collide. Resume also replied before renderLogs. Both now reply in finally after their awaited UI work; no awaited work follows response, and run() clears busy through microtasks before parent message delivery. A UI refresh failure still returns the established connection. Genuine concurrent operations remain guarded. README/web docs updated. Requires hosted wallet redeploy; no FON or contracts edited. Do not claim exact user error confirmed until reply arrives.
+
+Validation: wallet build and 11 existing browser tests passed; docs build and 15 tests passed; git diff --check passed. The precise live reported error and grant/resume race reproduction remain unconfirmed; existing browser suite does not exercise live funded grant completion.
+
 ## Modal close icon (2026-10-24)
 
 Replaced hosted SDK modal Close text button with an SVG cross (not a text x), borderless transparent 26px square preserving prior button height. Accessible name remains Close Pilot wallet; focus outline and hide/cancel semantics unchanged. Header uses wallet content shell padding 28px, 20px for narrow viewport matching embedded main. README and web docs updated. Integrating apps must rebuild/update SDK to receive header changes; no contract changes.
