@@ -177,12 +177,20 @@ html:not(.embedded) .modal-back { display: none; }
 .pilot-account-summary { padding: 15px; border: 1px solid #405b35; background: #102219; border-radius: 8px; margin-bottom: 20px; }
 .pilot-account-summary > strong { display: block; font-size: 15px; }
 .pilot-account-summary > small { font-size: 9px; margin: 6px 0 12px; color: #89a475; }
-.pilot-account-summary code { display: block; color: #859f73; font-size: 10px; }
+.pilot-account-summary code { display: block; color: #859f73; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal; overflow-wrap: normal; }
+.pilot-account-summary .session-account-toggle { display: block; }
+.pilot-account-summary .session-account-toggle:hover { text-decoration: underline; }
 .pilot-account-summary button { padding: 5px 0; border: 0; background: none; color: var(--lime); font-size: 10px; }
 .pilot-account-summary p { font-size: 11px; }
 .embedded .full { width: 100%; margin-right: 0; }
 .embedded .activity-card { margin: 18px 0 0; padding: 0; border-width: 1px 0 0; border-radius: 0; background: none; }
 .embedded .activity-card summary { font-size: 12px; padding: 15px 0; }
+.account-receipts { padding-bottom: 16px; }
+.account-receipts ul { list-style: none; padding: 0; margin: 0; }
+.account-receipts li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.account-receipts a { color: var(--lime); font: 11px 'SFMono-Regular', Consolas, monospace; text-decoration: none; }
+.account-receipts a:hover { text-decoration: underline; }
+.account-receipts small { flex-basis: 100%; color: var(--muted); font-size: 10px; }
 .embedded .management-card { margin-top: 0; }
 .embedded .management-card h2 { display: none; }
 .embedded .management-card > button { display: block; width: 100%; margin-right: 0; text-align: left; }

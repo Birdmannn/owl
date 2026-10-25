@@ -105,6 +105,30 @@ Builders still supply app dependencies, assets, business rules and app-specific 
 
 `PilotWalletSession` is the trusted-wallet implementation, not an app-side key store. Its methods include grant, send, resume, stop, revoke and recover. All signed receipts are saved before service submission, uncertain outcomes block later spending, and stable IDs reject changed requests. A new session replaces the existing one only after saved receipts settle. Old app connections cannot sign, prepare effects, read another app’s receipts or stop its replacement through the iframe protocol. The wallet profile shows all account receipts; app RPC logs are filtered to the requesting origin. Local disconnect stops new signatures and settles saved signed/submitted receipts before removing the signer iframe; use on-chain revoke to remove cryptographic session authority.
 
+
+### Build policies after account selection
+
+Apps whose transaction locks depend on the selected Pilot address can use `buildPolicies` instead of a fixed `policies` array:
+
+```ts
+const connection = await provider.connect({
+  name: 'My app',
+  budget: ccc.fixedPointFrom(200).toString(),
+  async buildPolicies(selected) {
+    // Public metadata only. No active signer or spending approval yet.
+    // selected.address is the session account; selected.ownerAddress is its owner.
+    // Implement this function in your app using your contracts/builders:
+    return appPoliciesForAccount(selected);
+  },
+});
+```
+
+`buildPolicies` receives a `PilotWalletSelectedAccount`: `address`, `ownerAddress`, public `account` descriptor and `appOrigin`. It returns a catalog of `PilotCellPolicy` values, directly or through a promise. The wallet creates/restores the descriptor after passkey authentication, sends public metadata through the bound connection channel, displays returned policies unchecked, and requires explicit selection and owner approval. The callback is not an authorization and must not call signing APIs or assume `provider.account`/`provider.connected` is active. It may read public chain data to calculate exact lock/type/data hashes. Policy limits (50 offered, 16 selected), exact-hash validation and spending rules are unchanged; a scope hash with direction `message` does not authorize transaction outputs. One app action may need several cell policies.
+
+For a new account, fund the passkey owner first: its initial live funding input determines the session TYPE_ID/address. The modal displays the owner funding address, then Load account permissions retries after funding or a builder failure. No funding transaction is signed merely to reveal the account descriptor. An externally spent seed still invalidates initial funding; approval must not silently use another address. Existing funded descriptors are restored. Account changes discard old policies/selections and invoke the builder again; replies bind the app/wallet source and origins, connection request and selection token. Recheck account identity under the approval lock before granting. Keep builder results specific to the selected account and current app context rather than caching a previous account’s permissions.
+
+Builder errors stay in the modal for retry; `connect()` remains pending until successful grant/resume or provider disposal. Fixed-policy `connect({ policies, ... })` remains supported. Update/reinstall the SDK in the integrating app and redeploy `apps/wallet` together for this handoff; no on-chain contract deployment is required. It resolves address-dependent policy construction, not blanket authorization of unknown future contract instances. The session remains unapproved until the user completes review.
+
 ## Scoped off-chain actions
 
 A message policy commits to a scope hash with direction `message`. The wallet signs an envelope binding the account hash, app origin, session key, scope, message, nonce and expiry. Use `provider.request('signMessage', { scope, message, nonce })` and `verifyPilotScopedMessage` in the receiving API. The verifier checks the live authority and scope, so revocation invalidates verification of old-key messages. It does not store replay state: the API must atomically consume its expected nonce and enforce authorization/business rules.

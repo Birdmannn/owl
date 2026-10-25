@@ -25,6 +25,8 @@ Developer projects, dashboard authentication, project secrets, project-bound acc
 
 The wallet is deployed once on a stable HTTPS origin and shared by integrating apps. The demo/backend and docs remain separate deployments. Browser origin allowlists are the current service configuration; project credentials and a dashboard do not exist yet. See [PILOT_WALLET.md](PILOT_WALLET.md) for the implemented protocol and limits.
 
+Current hosted SDK also supports an account-dependent `buildPolicies(selected)` callback: public owner/session addresses and descriptor are handed to the app after authentication but before policy selection/approval. It returns exact cell policies in the same modal; fixed-policy connection remains available. This is implemented SDK/wallet behavior, not the future validator framework or universal authorization for unknown contracts. New account address derivation requires an owner funding seed. See `PILOT_WALLET.md` for the integration API and retry limits.
+
 ## Account creation, discovery and recovery to investigate
 
 **V2 research and design work, not implemented.** Users can already create another wallet directly in the modal, sign in and switch among accounts known to that wallet origin in the same available wallet storage partition. Browsers can partition embedded storage by app or block it; a shared URL does not guarantee a shared local account list. The missing feature is reliable account discovery and restoration on another browser/device, not wallet creation itself.

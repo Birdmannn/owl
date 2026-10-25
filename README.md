@@ -427,9 +427,9 @@ Pilot wallet error displays, hosted SDK error responses and React modal error di
 
 Initial approval transfers the reviewed budget plus occupied authority-cell capacity from the passkey owner to the session account and returns owner change; the paymaster pays the eligible network fee. If the owner cannot cover initial funding, approval fails before signing. A replacement grant reuses existing account capacity and updates the spending allowance; it does not automatically transfer additional funds. That allowance may exceed current funds, so it is not a balance or a guarantee that an action can be funded.
 
-The wallet balance display now queries total capacity for the exact lock, including typed state/asset cells. CCC’s ordinary-cell balance excludes those cells and could previously display a funded session account as 0 CKB. Totals include occupied capacity, which is not all spendable. After a new grant confirms, the wallet refreshes balances; indexer lag can still delay totals. To verify a particular approval, use the session address from Copy address in the connected profile or the grant receipt’s hash in Queue and all account receipts and inspect its committed inputs and outputs. A displayed limit alone does not prove a transfer.
+The wallet balance display now queries total capacity for the exact lock, including typed state/asset cells. CCC’s ordinary-cell balance excludes those cells and could previously display a funded session account as 0 CKB. Totals include occupied capacity, which is not all spendable. After a new grant confirms, the wallet refreshes balances; indexer lag can still delay totals. To verify a particular approval, use the session address from Show session account → Copy session address in the connected profile or the Session approval transaction link in Queue and all account receipts and inspect its committed inputs and outputs. A displayed limit alone does not prove a transfer.
 
-In an embedded wallet, Copy address requests clipboard permission through the SDK iframe. A host permissions policy or browser can still block automatic copying; Pilot then selects the visible public address and asks you to copy it manually (Ctrl+C or ⌘C). This does not affect signing or funding.
+In an embedded wallet, the address copy buttons request clipboard permission through the SDK iframe. A host permissions policy or browser can still block automatic copying; Pilot then selects the visible public address and asks you to copy it manually (Ctrl+C or ⌘C). This does not affect signing or funding.
 
 The embedded modal uses a borderless cross icon with an Owl light-green stroke (#c7f881) to close it, aligned with the content shell and labelled “Close Pilot wallet” for assistive technology. Closing hides the modal while retaining the connected signer.
 
@@ -438,3 +438,30 @@ V2 plans a [shorter-address lock redesign](IMPLEMENTATION_V2.md#shorter-account-
 Connection completion waits until the wallet finishes its grant/resume UI work before replying to the integrating app. Apps may immediately request logs or prepare an action after `connect()` resolves; the just-completed approval must not cause an “Another wallet operation is in progress; retry with the same request ID” rejection. This is a wallet request-ordering fix, not a duplicate-session migration. Overlapping operations that are genuinely still running remain blocked. Redeploy the hosted wallet for this fix.
 
 The embedded wallet content shell uses equal padding on all four sides: 28px normally and 20px at wallet viewport widths of 370px or less. The modal still sizes to its content up to 70vh.
+
+The profile shows the passkey owner address by default. Show session account reveals the separate session address above the toggle, which becomes Hide session account and underlines on hover. Both addresses fit one line with visual ellipsis; Copy owner address and Copy session address copy their complete respective addresses, including during the manual-copy fallback. This display change does not change the session address returned to integrating apps.
+
+Queue and all account receipts displays a compact action/operation label and clickable transaction hash opening CKB Testnet Nervos Explorer. It no longer renders raw journal JSON. Pending receipts retain a brief status so a saved signature is not mistaken for confirmation; signed off-chain messages show their scope with no explorer transaction link. Current transaction receipts retain operation kinds, not the exact app principle name, so app transactions are labelled App action rather than inventing a policy match. Complete receipts remain available through the SDK logs API.
+
+### Build policies after account selection
+
+Apps whose transaction locks depend on the selected Pilot address can use `buildPolicies` instead of a fixed `policies` array:
+
+```ts
+const connection = await provider.connect({
+  name: 'My app',
+  budget: ccc.fixedPointFrom(200).toString(),
+  async buildPolicies(selected) {
+    // Public metadata only. No active signer or spending approval yet.
+    // selected.address is the session account; selected.ownerAddress is its owner.
+    // Implement this function in your app using your contracts/builders:
+    return appPoliciesForAccount(selected);
+  },
+});
+```
+
+`buildPolicies` receives a `PilotWalletSelectedAccount`: `address`, `ownerAddress`, public `account` descriptor and `appOrigin`. It returns a catalog of `PilotCellPolicy` values, directly or through a promise. The wallet creates/restores the descriptor after passkey authentication, sends public metadata through the bound connection channel, displays returned policies unchecked, and requires explicit selection and owner approval. The callback is not an authorization and must not call signing APIs or assume `provider.account`/`provider.connected` is active. It may read public chain data to calculate exact lock/type/data hashes. Policy limits (50 offered, 16 selected), exact-hash validation and spending rules are unchanged; a scope hash with direction `message` does not authorize transaction outputs. One app action may need several cell policies.
+
+For a new account, fund the passkey owner first: its initial live funding input determines the session TYPE_ID/address. The modal displays the owner funding address, then Load account permissions retries after funding or a builder failure. No funding transaction is signed merely to reveal the account descriptor. An externally spent seed still invalidates initial funding; approval must not silently use another address. Existing funded descriptors are restored. Account changes discard old policies/selections and invoke the builder again; replies bind the app/wallet source and origins, connection request and selection token. Recheck account identity under the approval lock before granting. Keep builder results specific to the selected account and current app context rather than caching a previous account’s permissions.
+
+Builder errors stay in the modal for retry; `connect()` remains pending until successful grant/resume or provider disposal. Fixed-policy `connect({ policies, ... })` remains supported. Update/reinstall the SDK in the integrating app and redeploy `apps/wallet` together for this handoff; no on-chain contract deployment is required. It resolves address-dependent policy construction, not blanket authorization of unknown future contract instances. The session remains unapproved until the user completes review.

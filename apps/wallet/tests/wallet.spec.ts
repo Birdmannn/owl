@@ -5,6 +5,7 @@ import {
   type BrowserContext,
   type Frame,
 } from "@playwright/test";
+import { ccc } from "@ckb-ccc/core";
 async function authenticator(context: BrowserContext, page: Page | Frame) {
   const cdp = await context.newCDPSession(page).catch(async (error) => {
     if (
@@ -45,6 +46,78 @@ async function returnWithPasskey(page: Page) {
   await expect(wallet.locator("#status")).toContainText("Passkey verified");
   return wallet;
 }
+test("account-specific policies are built before approval and rebuilt after account switching", async ({ page, context }) => {
+  // Public chain fixture: no real funding, grant or transaction submission.
+  const seedHash = `0x${"12".repeat(32)}`;
+  let ownerLock: unknown;
+  let funded = false;
+  await page.route("https://testnet.ckb.dev/**", async route => {
+    const request = route.request().postDataJSON();
+    let result: unknown;
+    if (request.method === "get_cells") {
+      ownerLock = request.params[0].script;
+      result = { last_cursor: "0x", objects: funded ? [{
+        block_number: "0x1", tx_index: "0x0", out_point: { tx_hash: seedHash, index: "0x0" },
+        output: { capacity: "0xe8d4a51000", lock: ownerLock, type: null }, output_data: "0x",
+      }] : [] };
+    } else if (request.method === "get_live_cell") {
+      result = { status: "live", cell: { output: { capacity: "0xe8d4a51000", lock: ownerLock, type: null }, data: { content: "0x", hash: `0x${"00".repeat(32)}` } } };
+    } else result = null;
+    await route.fulfill({ json: { jsonrpc: "2.0", id: request.id, result } });
+  });
+  await page.goto("http://localhost:5177/tests/app.html?dynamic=1");
+  await page.evaluate(() => window.addEventListener("message", event => {
+    if (event.data?.method === "accountSelected") Object.assign(window, { policyEnvelope: event.data });
+  }));
+  await page.getByRole("button", { name: "Connect Pilot", exact: true }).click();
+  const wallet = await enterPilot(page);
+  const frame = page.frames().find(f => f.url().startsWith("http://localhost:5176/"))!;
+  await authenticator(context, frame);
+  await wallet.getByLabel("Account name", { exact: true }).fill("Dynamic Alice");
+  await wallet.getByRole("button", { name: "Create Pilot passkey", exact: true }).click();
+  await expect(wallet.locator("#error")).toContainText("fund the displayed passkey owner address first");
+  await expect(wallet.getByRole("checkbox")).toHaveCount(0);
+  await expect(wallet.getByRole("button", { name: "Approve session with passkey" })).toBeDisabled();
+  funded = true;
+  await page.evaluate(() => Object.assign(window, { failPolicyBuilder: true }));
+  await wallet.getByRole("button", { name: "Load account permissions" }).click();
+  await expect(wallet.locator("#error")).toContainText("Policy builder unavailable");
+  await expect(wallet.getByRole("checkbox")).toHaveCount(0);
+  await page.evaluate(() => Object.assign(window, { failPolicyBuilder: false, holdPolicyBuilder: true }));
+  await wallet.getByRole("button", { name: "Load account permissions" }).click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).releasePolicyBuilder)).toBe("function");
+  // Correct parent/source/channel/request, but a stale selection token must be ignored.
+  await page.evaluate(() => {
+    const envelope = (window as any).policyEnvelope;
+    document.querySelector("[data-pilot-wallet]")!.shadowRoot!.querySelector("iframe")!.contentWindow!.postMessage({
+      ...envelope, method: "policiesReady", params: { selectionId: "stale-selection", policies: [] },
+    }, "http://localhost:5176");
+  });
+  await expect(wallet.getByRole("checkbox")).toHaveCount(0);
+  await page.evaluate(() => { (window as any).holdPolicyBuilder = false; (window as any).releasePolicyBuilder(); });
+  const choice = wallet.getByRole("checkbox", { name: "Account-specific output" });
+  await expect(choice).toBeVisible();
+  await expect(choice).not.toBeChecked();
+  const first = await page.evaluate(() => (window as any).pilotSelectedAccount);
+  expect(first.ownerAddress).toMatch(/^ckt1/);
+  expect(first.address).toMatch(/^ckt1/);
+  expect(first.address).not.toBe(first.ownerAddress);
+  expect(first.expiresAt).toBeUndefined();
+  expect(await page.evaluate(() => (window as any).pilotTestProvider.connected)).toBe(false);
+  const expectedHash = (await ccc.Address.fromString(first.address, new ccc.ClientPublicTestnet())).script.hash();
+  await expect(wallet.locator(".policy pre")).toContainText(expectedHash);
+  await expect(page.locator("p")).toHaveText("Waiting");
+  await choice.check();
+  await wallet.getByRole("button", { name: "← Back", exact: true }).click();
+  await wallet.getByRole("button", { name: "Create account", exact: true }).click();
+  await wallet.getByLabel("Account name", { exact: true }).fill("Dynamic Bob");
+  await wallet.getByRole("button", { name: "Create Pilot passkey", exact: true }).click();
+  await expect(choice).toBeVisible();
+  await expect(choice).not.toBeChecked();
+  const second = await page.evaluate(() => (window as any).pilotSelectedAccount);
+  expect(second.ownerAddress).not.toBe(first.ownerAddress);
+  expect(second.address).not.toBe(first.address);
+});
 test('hosted app offers 50 policies and the user selects at most 16', async ({ page, context }) => {
   await page.goto('http://localhost:5177/tests/app.html?catalog=50');
   await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();
@@ -67,7 +140,7 @@ test('hosted app offers 50 policies and the user selects at most 16', async ({ p
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
       writeText: async () => { throw new DOMException("Blocked by permissions policy", "NotAllowedError"); },
     } });
-    const copy = [...document.querySelectorAll("button")].find(b => b.textContent === "Copy address")!;
+    const copy = [...document.querySelectorAll("button")].find(b => b.textContent === "Copy owner address")!;
     copy.closest("section")!.hidden = false;
     copy.click();
   });

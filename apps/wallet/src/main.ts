@@ -213,7 +213,9 @@ let session: PilotWalletSession | undefined;
 let connection: PilotWalletConnection | undefined;
 let busy = false;
 let pendingConnect:
-  { request: PilotWalletConnect; envelope: PilotWalletEnvelope } | undefined;
+  { request: PilotWalletConnect & { dynamicPolicies?: boolean }; envelope: PilotWalletEnvelope } | undefined;
+let policySelection: { id: string; requestId: string; accept: (value: unknown) => void } | undefined;
+let policyAccountHash: string | undefined;
 let selectedPolicies: number[] = [];
 type ModalStep = "welcome" | "signin" | "permissions" | "profile";
 let modalStep: ModalStep = "welcome";
@@ -223,7 +225,7 @@ modalHeading.className = "modal-heading";
 modalHeading.tabIndex = -1;
 const modalBack = node("button", "← Back");
 modalBack.className = "modal-back";
-modalBack.onclick = () => goTo(modalStep === "signin" ? "welcome" : "profile");
+modalBack.onclick = () => goTo(modalStep === "signin" ? "welcome" : modalStep === "permissions" && !connection && pendingConnect?.request.dynamicPolicies ? "signin" : "profile");
 const workspace = node("div");
 workspace.className = "workspace";
 const welcome = node("section", undefined, workspace);
@@ -262,6 +264,8 @@ renderAccounts();
 select.onchange = () => {
   selected = passkeys.find((p) => p.credentialId === select.value);
   authenticated = false;
+  policyAccountHash = undefined;
+  if (pendingConnect?.request.dynamicPolicies) { pendingConnect.request.policies = []; selectedPolicies = []; policyList.replaceChildren(); }
   resumable = undefined;
   continueSession.hidden = true;
   session = undefined;
@@ -367,6 +371,8 @@ const createPasskey = button("Create Pilot passkey", async () => {
   await renderLogs();
   status.textContent =
     "Passkey created. Its owner private key remains in your authenticator.";
+  if (embedded && pendingConnect?.request.dynamicPolicies) goTo("permissions");
+  await requestAccountPolicies();
   if (embedded) goTo(pendingConnect ? "permissions" : "profile");
 });
 createPasskey.className = "primary";
@@ -381,6 +387,8 @@ const signIn = button("Sign in with passkey", async () => {
   await renderLogs();
   status.textContent =
     "Passkey verified. Review the requesting app before authorizing a session.";
+  if (embedded && pendingConnect?.request.dynamicPolicies) goTo("permissions");
+  await requestAccountPolicies();
   await offerExistingSession();
   if (embedded) goTo(pendingConnect ? "permissions" : "profile");
 });
@@ -535,6 +543,99 @@ budget.addEventListener("input", () => {
   resumable = undefined;
   continueSession.hidden = true;
 });
+async function prepareAccount(passkey: PilotPasskey): Promise<PilotWalletDescriptor> {
+  if (!config.walletSession || !config.passkey) throw new Error("Configure the wallet deployment first");
+  const saved = localStorage.getItem(accountKey(passkey));
+  let account: PilotWalletDescriptor;
+  if (saved) account = parsePilotWalletDescriptor(JSON.parse(saved));
+  else {
+    let seed: ccc.Cell | undefined;
+    for await (const c of client.findCellsByLock(
+      pilotPasskeyLock(passkey),
+      null,
+    ))
+      if (
+        !c.cellOutput.type &&
+        c.outputData === "0x" &&
+        (await client.getCellLive(c.outPoint, true))
+      ) {
+        seed = c;
+        break;
+      }
+    if (!seed)
+      throw new Error(
+        "Open “Fund your Pilot account” and fund the displayed passkey owner address first. Keep an ordinary owner cell for recovery.",
+      );
+    account = createPilotWalletDescriptor(
+      pilotPasskeyLock(passkey),
+      config.walletSession!,
+      config.poolLock,
+      maxFee,
+      { previousOutput: seed.outPoint },
+    );
+    localStorage.setItem(
+      accountKey(passkey),
+      JSON.stringify(account),
+    );
+  }
+  if (!ccc.Script.from(account.ownerLock).eq(pilotPasskeyLock(passkey)))
+    throw new Error("Saved account belongs to a different passkey owner");
+  return account;
+}
+function renderPolicyChoices() {
+  selectedPolicies = [];
+  policyList.replaceChildren();
+  const v = pendingConnect?.request;
+  if (!v) return;
+  v.policies.forEach((p, i) => {
+    const policy = node("div", undefined, policyList);
+    policy.className = "policy";
+    const l = node("label", undefined, policy),
+      box = node("input", undefined, l);
+    box.type = "checkbox";
+    box.onchange = () => {
+      resumable = undefined;
+      continueSession.hidden = true;
+      selectedPolicies = box.checked
+        ? (selectedPolicies.length < MAX_DELEGATED_ACTIONS && !selectedPolicies.includes(i) ? [...selectedPolicies, i] : selectedPolicies)
+        : selectedPolicies.filter((n) => n !== i);
+      renderModal();
+    };
+    l.append(document.createTextNode(p.name));
+    const technical = node("details", undefined, policy);
+    node("summary", "View policy details", technical);
+    node("pre", JSON.stringify(p, null, 2), technical);
+  });
+  renderModal();
+}
+async function requestAccountPolicies() {
+  const approval = pendingConnect, passkey = selected;
+  if (!approval?.request.dynamicPolicies || !passkey || !authenticated) return;
+  policyAccountHash = undefined;
+  approval.request.policies = [];
+  renderPolicyChoices();
+  status.textContent = "Preparing account-specific permissions…";
+  const account = await navigator.locks.request(accountKey(passkey) + ":owner-operation", () => prepareAccount(passkey));
+  const id = crypto.randomUUID();
+  const result = await new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => { policySelection = undefined; reject(new Error("App policy builder timed out; sign in again to retry")); }, 300_000);
+    policySelection = { id, requestId: approval.envelope.id, accept: value => { clearTimeout(timer); resolve(value); } };
+    peer?.postMessage({ protocol: PILOT_WALLET_PROTOCOL, channel, id: approval.envelope.id, method: "accountSelected", params: {
+      selectionId: id, account: { account, appOrigin,
+        ownerAddress: ccc.Address.from({prefix: client.addressPrefix, script: pilotPasskeyLock(passkey)}).toString(),
+        address: ccc.Address.from({prefix: client.addressPrefix, script: pilotWalletLock(account)}).toString(),
+      },
+    } }, appOrigin);
+  }) as { policies?: PilotWalletConnect["policies"]; error?: string };
+  if (pendingConnect !== approval || selected !== passkey || !authenticated)
+    throw new Error("Account selection changed; sign in again");
+  if (result.error) throw new Error(result.error);
+  validatePilotPolicyCatalog(result.policies!);
+  approval.request.policies = structuredClone(result.policies!);
+  policyAccountHash = pilotWalletLock(account).hash();
+  renderPolicyChoices();
+  status.textContent = "Review this account’s permissions and spending budget.";
+}
 async function offerExistingSession() {
   resumable = undefined;
   continueSession.hidden = true;
@@ -542,6 +643,7 @@ async function offerExistingSession() {
   const raw = localStorage.getItem(accountKey(selected));
   if (!raw) return;
   const account: PilotWalletDescriptor = JSON.parse(raw), hash = pilotWalletLock(account).hash();
+  if (pendingConnect.request.dynamicPolicies && policyAccountHash !== hash) return;
   const journal: PilotWalletJournal | undefined = JSON.parse(localStorage.getItem("pilot:wallet:journal:" + hash) ?? "null");
   const state = journal?.state;
   const metadata = JSON.parse((state && localStorage.getItem("pilot:wallet:session-meta:" + state.publicKey)) || localStorage.getItem("pilot:wallet:active:" + hash) || "null");
@@ -566,6 +668,10 @@ async function offerExistingSession() {
   continueSession.hidden = false;
   status.textContent = `Passkey verified. Continue the existing session with ${budget.value} CKB remaining, or explicitly review a replacement grant.`;
 }
+const loadAccountPolicies = button("Load account permissions", async () => {
+  await requestAccountPolicies();
+  await offerExistingSession();
+}, review);
 const grant = button(
   "Approve session with passkey",
   async () => {
@@ -601,39 +707,9 @@ const grant = button(
           config.poolLock,
         );
         await owner.connect();
-        const saved = localStorage.getItem(accountKey(ownerSelection));
-        let account: PilotWalletDescriptor;
-        if (saved) account = JSON.parse(saved);
-        else {
-          let seed: ccc.Cell | undefined;
-          for await (const c of client.findCellsByLock(
-            pilotPasskeyLock(ownerSelection),
-            null,
-          ))
-            if (
-              !c.cellOutput.type &&
-              c.outputData === "0x" &&
-              (await client.getCellLive(c.outPoint, true))
-            ) {
-              seed = c;
-              break;
-            }
-          if (!seed)
-            throw new Error(
-              "Open “Fund your Pilot account” and fund the displayed passkey owner address first. Keep an ordinary owner cell for recovery.",
-            );
-          account = createPilotWalletDescriptor(
-            pilotPasskeyLock(ownerSelection),
-            config.walletSession!,
-            config.poolLock,
-            maxFee,
-            { previousOutput: seed.outPoint },
-          );
-          localStorage.setItem(
-            accountKey(ownerSelection),
-            JSON.stringify(account),
-          );
-        }
+        const account = await prepareAccount(ownerSelection);
+        if (approval.request.dynamicPolicies && policyAccountHash !== pilotWalletLock(account).hash())
+          throw new Error("Account changed; sign in again to rebuild its permissions");
         const secret = ccc.hexFrom(secp256k1.utils.randomSecretKey()),
           publicKey = ccc.hexFrom(
             secp256k1.getPublicKey(ccc.bytesFrom(secret), true),
@@ -717,21 +793,36 @@ profileSummary.className = "pilot-account-summary";
 const profileName = node("strong", "Pilot", profileSummary);
 node("small", "Passkey account · CKB Testnet", profileSummary);
 const profileAddress = node("code", undefined, profileSummary);
-button("Copy address", async () => {
+profileAddress.setAttribute("aria-label", "Owner account address");
+const copyOwner = button("Copy owner address", async () => copyProfileAddress(profileAddress), profileSummary);
+const sessionAccount = node("div", undefined, profileSummary);
+sessionAccount.hidden = true;
+node("small", "Session account", sessionAccount);
+const sessionAddress = node("code", undefined, sessionAccount);
+sessionAddress.setAttribute("aria-label", "Session account address");
+button("Copy session address", async () => copyProfileAddress(sessionAddress), sessionAccount);
+const toggleSession = button("Show session account", async () => {
+  sessionAccount.hidden = !sessionAccount.hidden;
+  toggleSession.textContent = sessionAccount.hidden ? "Show session account" : "Hide session account";
+  toggleSession.setAttribute("aria-expanded", String(!sessionAccount.hidden));
+}, profileSummary);
+toggleSession.className = "session-account-toggle";
+toggleSession.setAttribute("aria-expanded", "false");
+async function copyProfileAddress(address: HTMLElement) {
   if (!selected) throw new Error("Sign in first");
   try {
-    await navigator.clipboard.writeText(profileAddress.textContent ?? "");
+    await navigator.clipboard.writeText(address.textContent ?? "");
     status.textContent = "Address copied.";
   } catch {
     // Host permissions can block clipboard access even after iframe delegation.
     const selection = window.getSelection();
     const range = document.createRange();
-    range.selectNodeContents(profileAddress);
+    range.selectNodeContents(address);
     selection?.removeAllRanges();
     selection?.addRange(range);
     status.textContent = "Automatic copying is blocked by your browser. Address selected; copy it manually (Ctrl+C or ⌘C).";
   }
-}, profileSummary);
+}
 const profileBalance = node("p", "Refresh to see your balance.", profileSummary);
 button("Refresh balance", refreshAvailableBalances, profileSummary);
 button("Review permissions", async () => goTo("permissions"), profile).className = "primary full";
@@ -825,7 +916,8 @@ button(
 const logs = node("details");
 logs.className = "activity-card";
 node("summary", "Queue and all account receipts", logs);
-const logBody = node("pre", "No account selected.", logs);
+const logBody = node("div", "No account selected.", logs);
+logBody.className = "account-receipts";
 const footer = node("footer");
 node("span", "PILOT / BY OWL", footer);
 node("span", "Less signing. More doing.", footer);
@@ -847,6 +939,8 @@ function goTo(step: ModalStep) {
   }
 }
 function renderModal() {
+  loadAccountPolicies.hidden = !pendingConnect?.request.dynamicPolicies || !!policyAccountHash;
+  loadAccountPolicies.disabled = busy || !authenticated;
   continueSession.disabled = busy || !resumable || !pendingConnect || !authenticated;
   grant.disabled = !ready || !pendingConnect || !authenticated || !selectedPolicies.length || selectedPolicies.length > MAX_DELEGATED_ACTIONS || busy;
   selectionCount.textContent = pendingConnect ? `${selectedPolicies.length} / ${MAX_DELEGATED_ACTIONS} policies selected · ${pendingConnect.request.policies.length} offered. Uncheck a policy to change your selection at the limit.` : '';
@@ -877,8 +971,19 @@ function renderModal() {
   signIn.hidden = createMode;
   addresses.hidden = balances.hidden = refreshBalances.hidden = true;
   profileName.textContent = selected?.name || "Pilot";
-  const displayedAddress = connection?.address || ownerAddress.textContent;
+  const displayedAddress = ownerAddress.textContent;
   if (profileAddress.textContent !== displayedAddress) profileAddress.textContent = displayedAddress;
+  profileAddress.title = displayedAddress ?? "";
+  const appAddress = connection?.address ?? "";
+  if (sessionAddress.textContent !== appAddress) {
+    sessionAddress.textContent = appAddress;
+    sessionAccount.hidden = true;
+    toggleSession.textContent = "Show session account";
+    toggleSession.setAttribute("aria-expanded", "false");
+  }
+  sessionAddress.title = appAddress;
+  toggleSession.hidden = !appAddress;
+  copyOwner.disabled = busy || !selected;
   fundingAddress.textContent = selected ? ownerAddress.textContent : "Sign in to see your funding address.";
   fundingBalance.textContent = balances.textContent;
   profileHint.textContent = connection
@@ -906,7 +1011,37 @@ async function renderLogs(e = session) {
       if (saved) journal = JSON.parse(saved) as PilotWalletJournal;
     }
   }
-  logBody.textContent = journal ? JSON.stringify(journal, null, 2) : "No saved account receipts yet.";
+  logBody.replaceChildren();
+  if (!journal?.receipts.length && !journal?.messages?.length) {
+    logBody.textContent = "No saved account receipts yet.";
+    return;
+  }
+  const list = node("ul", undefined, logBody);
+  const labels = { grant: "Session approval", action: "App action", revoke: "Session revoked", recover: "Funds recovered" };
+  const entries = [
+    ...(journal?.receipts ?? []).map(r => ({
+      name: labels[r.kind] ?? "App action", hash: r.hash, at: r.createdAt,
+      status: r.status, onchain: true,
+    })),
+    ...(journal?.messages ?? []).map(m => ({
+      name: m.scope, hash: m.hash, at: m.createdAt, status: "", onchain: false,
+    })),
+  ].sort((a, b) => b.at - a.at);
+  for (const entry of entries) {
+    const row = node("li", undefined, list);
+    node("span", entry.name, row);
+    if (entry.onchain && /^0x[0-9a-fA-F]{64}$/.test(entry.hash)) {
+      const link = node("a", `${entry.hash.slice(0, 12)}…${entry.hash.slice(-8)} ↗`, row);
+      link.href = `https://testnet.explorer.nervos.org/transaction/${entry.hash}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = entry.hash;
+      link.setAttribute("aria-label", `${entry.name}: ${entry.hash} — ${entry.status}`);
+      if (entry.status !== "confirmed") node("small", entry.status === "requote" ? "Needs sponsorship retry" : entry.status === "signed" ? "Awaiting submission" : "Awaiting confirmation", row);
+    } else {
+      node("small", entry.onchain ? "Transaction hash unavailable" : "Message signed · no on-chain transaction", row);
+    }
+  }
 }
 function accountKey(p: PilotPasskey) {
   return "pilot:wallet:account:" + p.publicKey + ":testnet";
@@ -1020,6 +1155,15 @@ window.addEventListener("message", (event) => {
     if (request.id === activeRequestId) cancelOwnerReview?.();
     return;
   }
+  if (request.method === "policiesReady") {
+    const result = request.params as { selectionId?: string } | undefined;
+    if (policySelection && request.id === policySelection.requestId && result?.selectionId === policySelection.id) {
+      const selection = policySelection;
+      policySelection = undefined;
+      selection.accept(result);
+    }
+    return;
+  }
   if (operation || busy) {
     reply(
       request,
@@ -1032,8 +1176,11 @@ window.addEventListener("message", (event) => {
     try {
       if (pendingConnect || connection)
         throw new Error("A connection is already active");
-      const v = request.params as PilotWalletConnect;
-      validatePilotPolicyCatalog(v.policies);
+      const v = request.params as PilotWalletConnect & { dynamicPolicies?: boolean };
+      if (v.dynamicPolicies) {
+        if (params.get("accountPolicies") !== "1" || !Array.isArray(v.policies) || v.policies.length)
+          throw new Error("Invalid account-policy handoff");
+      } else validatePilotPolicyCatalog(v.policies);
       if (
         typeof v.name !== "string" ||
         !v.name ||
@@ -1047,25 +1194,7 @@ window.addEventListener("message", (event) => {
       appName.textContent = `${v.name} — ${appOrigin}`;
       budget.value = ccc.fixedPointToString(BigInt(v.budget));
       policyList.replaceChildren();
-      v.policies.forEach((p, i) => {
-        const policy = node("div", undefined, policyList);
-        policy.className = "policy";
-        const l = node("label", undefined, policy),
-          box = node("input", undefined, l);
-        box.type = "checkbox";
-        box.onchange = () => {
-          resumable = undefined;
-          continueSession.hidden = true;
-          selectedPolicies = box.checked
-            ? (selectedPolicies.length < MAX_DELEGATED_ACTIONS && !selectedPolicies.includes(i) ? [...selectedPolicies, i] : selectedPolicies)
-            : selectedPolicies.filter((n) => n !== i);
-          renderModal();
-        };
-        l.append(document.createTextNode(p.name));
-        const technical = node("details", undefined, policy);
-        node("summary", "View policy details", technical);
-        node("pre", JSON.stringify(p, null, 2), technical);
-      });
+      renderPolicyChoices();
       renderModal();
     } catch (e) {
       reply(request, undefined, e instanceof Error ? e.message : String(e));

@@ -20,6 +20,13 @@ export interface PilotWalletConnection {
   appOrigin: string;
   expiresAt: number;
 }
+/** Public account selection only: no spending authority exists until approval. */
+export type PilotWalletSelectedAccount = Omit<PilotWalletConnection, "expiresAt">;
+export type PilotWalletPolicyBuilder = (account: PilotWalletSelectedAccount) =>
+  readonly PilotCellPolicy[] | Promise<readonly PilotCellPolicy[]>;
+export type PilotWalletDynamicConnect = Omit<PilotWalletConnect, "policies"> & {
+  buildPolicies: PilotWalletPolicyBuilder;
+};
 export interface PilotWalletEnvelope {
   protocol: typeof PILOT_WALLET_PROTOCOL;
   channel: string;
@@ -64,6 +71,7 @@ export class PilotWalletProvider {
   readonly origin: string;
   private disposed = false;
   private approvalRequest?: { id: string; opened: boolean };
+  private policyBuilder?: PilotWalletPolicyBuilder;
   constructor(
     readonly options: { url: string; timeoutMs?: number; styleNonce?: string },
   ) {
@@ -84,6 +92,26 @@ export class PilotWalletProvider {
     )
       return;
     const v = event.data;
+    if (v.method === "accountSelected") {
+      const pending = this.pending.get(v.id);
+      if (pending?.method !== "connect" || !this.policyBuilder) return;
+      const selection = v.params as { selectionId: string; account: PilotWalletSelectedAccount };
+      if (!selection || typeof selection.selectionId !== "string" ||
+          selection.account?.appOrigin !== location.origin) return;
+      const builder = this.policyBuilder;
+      const channel = this.channel;
+      void Promise.resolve().then(() => builder(structuredClone(selection.account))).then(policies => {
+        validatePilotPolicyCatalog(policies);
+        return { policies };
+      }).catch(error => ({ error: formatPilotError(error) })).then(result => {
+        if (this.disposed || channel !== this.channel || !this.pending.has(v.id)) return;
+        this.frame?.contentWindow?.postMessage({
+          protocol: PILOT_WALLET_PROTOCOL, channel, id: v.id, method: "policiesReady",
+          params: { selectionId: selection.selectionId, ...result },
+        } satisfies PilotWalletEnvelope, this.origin);
+      });
+      return;
+    }
     if (v.method === "resize") {
       const height = (v.params as { height?: unknown } | undefined)?.height;
       if (typeof height === "number" && Number.isSafeInteger(height) && height >= 0 && this.dialog)
@@ -194,10 +222,13 @@ export class PilotWalletProvider {
     } satisfies PilotWalletEnvelope, this.origin);
     this.dialog?.close();
   }
-  async connect(request: PilotWalletConnect): Promise<PilotWalletConnection> {
+  async connect(request: PilotWalletConnect | PilotWalletDynamicConnect): Promise<PilotWalletConnection> {
     try {
       if (this.disposed) throw new PilotError("Provider disposed");
-      validatePilotPolicyCatalog(request.policies);
+      const dynamic = "buildPolicies" in request;
+      if (dynamic) {
+        if (typeof request.buildPolicies !== "function") throw new PilotError("Provide a policy builder");
+      } else validatePilotPolicyCatalog(request.policies);
       if (
         !request.name ||
         request.name.length > 100 ||
@@ -211,11 +242,13 @@ export class PilotWalletProvider {
         );
       }
       this.channel = crypto.randomUUID();
+      this.policyBuilder = dynamic ? request.buildPolicies : undefined;
       const url = new URL(this.options.url);
       url.searchParams.set("appOrigin", location.origin);
       url.searchParams.set("channel", this.channel);
       url.searchParams.set("embed", "1");
       url.searchParams.set("progress", "1");
+      if (dynamic) url.searchParams.set("accountPolicies", "1");
       const ready = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           this.ready = undefined;
@@ -240,7 +273,8 @@ export class PilotWalletProvider {
       await ready;
       const connection = (await this.request(
         "connect",
-        request,
+        dynamic ? { name: request.name, budget: request.budget, durationMs: request.durationMs,
+          policies: [], dynamicPolicies: true } : request,
       )) as PilotWalletConnection;
       if (
         !connection ||
@@ -250,6 +284,7 @@ export class PilotWalletProvider {
       )
         throw new PilotError("Wallet returned an invalid session");
       this.connection = connection;
+      this.policyBuilder = undefined;
       this.hide();
       return connection;
     } catch (error) {
@@ -334,6 +369,7 @@ export class PilotWalletProvider {
   }
   dispose() {
     this.disposed = true;
+    this.policyBuilder = undefined;
     window.removeEventListener("message", this.receive);
     this.cancelReady?.();
     this.cancelReady = undefined;
