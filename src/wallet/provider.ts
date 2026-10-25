@@ -161,7 +161,7 @@ export class PilotWalletProvider {
     const cross = document.createElementNS("http://www.w3.org/2000/svg", "path");
     cross.setAttribute("d", "M6 6l12 12M18 6L6 18");
     cross.setAttribute("fill", "none");
-    cross.setAttribute("stroke", "currentColor");
+    cross.setAttribute("stroke", "#c7f881");
     cross.setAttribute("stroke-width", "1.8");
     cross.setAttribute("stroke-linecap", "round");
     icon.append(cross);
