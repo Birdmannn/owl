@@ -1,6 +1,6 @@
 # Pilot persistent accounts: first implementation
 
-> Update 2026-10-21: the separate passkey-owned, isolated-origin wallet is now implemented locally. Read [PILOT_WALLET.md](PILOT_WALLET.md) for its architecture, contracts, activation and limits. The broad-key account API described below remains available with its original restrictions. Neither new account architecture is deployed yet.
+> Update 2026-10-28: the passkey owner, restricted session and opt-in general account locks are deployed on testnet. The `walletGeneral` code cell is verified live with the expected SDK hash; redeploy the wallet/paymaster and update integrating apps for wallet-enforced templates. Hosted general-mode end-to-end signing remains unverified. See [TRANSACTION_TEMPLATES.md](TRANSACTION_TEMPLATES.md) for current integration/activation and [PILOT_WALLET.md](PILOT_WALLET.md) for owner recovery and isolation. The broad-key API described below is the earlier existing-wallet architecture; its custody limits remain distinct.
 
 This document records the agreed first version: one persistent owner-recoverable Pilot account per verified owner wallet and CKB network, with per-transaction sponsorship. It replaces neither the existing counter/delegation APIs nor app contract rules.
 

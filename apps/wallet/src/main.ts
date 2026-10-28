@@ -36,6 +36,7 @@ import {
 } from "../../../src/wallet/session";
 import {
   PILOT_PASSKEY_CODE_HASH,
+  PILOT_WALLET_GENERAL_CODE_HASH,
   PILOT_LEGACY_PASSKEY_CODE_HASH,
 } from "../../../src/wallet/code";
 import { PilotPaymasterClient } from "../../../src/paymaster";
@@ -45,6 +46,7 @@ const config = deployment as unknown as {
   passkey?: Deployment | null;
   passkeyLegacy?: Deployment | null;
   walletSession?: Deployment | null;
+  walletGeneral?: Deployment | null;
   poolLock: ccc.ScriptLike;
 };
 const client = new ccc.ClientPublicTestnet({
@@ -102,6 +104,8 @@ const status = node("p");
 status.id = "status";
 status.setAttribute("role", "status");
 const params = new URLSearchParams(location.search);
+const generalMode = params.get("accountMode") === "general";
+const sessionDeployment = generalMode ? config.walletGeneral : config.walletSession;
 let appOrigin = "";
 const channel = params.get("channel") ?? "";
 try {
@@ -188,7 +192,7 @@ try {
 const ready =
   storageReady &&
   config.passkey?.codeHash === PILOT_PASSKEY_CODE_HASH &&
-  !!config.walletSession &&
+  !!sessionDeployment &&
   !!paymasterUrl;
 if (!ready)
   node(
@@ -196,7 +200,7 @@ if (!ready)
     (!storageReady
       ? "Your browser blocks storage for the embedded Pilot wallet. Allow storage for this wallet origin or use a supported browser. "
       : config.passkey?.codeHash === PILOT_PASSKEY_CODE_HASH &&
-          config.walletSession
+          sessionDeployment
         ? "Fee sponsorship is not configured for this wallet. "
         : "On-chain sessions are unavailable until the wallet contracts and sponsorship are configured. ") +
       (storageReady
@@ -463,6 +467,8 @@ restore.onchange = () =>
       throw new Error("This passkey belongs to a different wallet origin");
     if (v.account) {
       v.account = parsePilotWalletDescriptor(v.account);
+      if ((v.account.deployment.codeHash === PILOT_WALLET_GENERAL_CODE_HASH) !== generalMode)
+        throw new Error("Open the wallet in the matching account mode before importing this recovery descriptor");
       if (!ccc.Script.from(v.account.ownerLock).eq(pilotPasskeyLock(v.passkey)))
         throw new Error("Recovery owner mismatch");
       const old = localStorage.getItem(accountKey(v.passkey));
@@ -485,6 +491,10 @@ restore.onchange = () =>
     if (embedded) goTo("signin");
   });
 const review = node("section", undefined, workspace);
+if (generalMode) {
+  const notice = node("p", "General signing account: Pilot checks selected action templates in wallet software. Your session key has broader on-chain authority; a stolen key can bypass these action checks and spend account assets within the CKB allowance. Your passkey retains recovery and revocation.", review);
+  notice.className = "availability-note";
+}
 review.className = "approval-card";
 review.id = "permissions";
 node("span", "02 / YOU SET THE RULES", review).className = "eyebrow";
@@ -512,7 +522,7 @@ policyHelp.className = "policy-help";
 node("summary", "How these permissions work", policyHelp);
 node(
   "p",
-  "Cell policies constrain full lock/type/data hashes and capacity. A zero data hash permits arbitrary data. This is not a named-contract-method interpreter. Expiry is checked by the wallet; revocation and remaining budget are enforced on-chain.",
+  generalMode ? "Pilot checks whole transactions against selected templates: script identity, argument/data constraints, roles, relationships, witness selectors and per-action spending. Templates are enforced by this wallet software, not the general account lock. The contract enforces authority continuity, the cumulative CKB allowance and per-transaction fee sponsorship. CKB budgets do not bound token or NFT value. Expiry is a wallet check." : "Cell policies constrain full lock/type/data hashes and capacity. A zero data hash permits arbitrary data. This is not a named-contract-method interpreter. Expiry is checked by the wallet; revocation and remaining budget are enforced on-chain.",
   policyHelp,
 );
 let resumable: { session: PilotWalletSession; owner: PilotPasskeySigner; expiresAt: number } | undefined;
@@ -544,7 +554,7 @@ budget.addEventListener("input", () => {
   continueSession.hidden = true;
 });
 async function prepareAccount(passkey: PilotPasskey): Promise<PilotWalletDescriptor> {
-  if (!config.walletSession || !config.passkey) throw new Error("Configure the wallet deployment first");
+  if (!sessionDeployment || !config.passkey) throw new Error(generalMode ? "General account lock is not deployed; configure walletGeneral before using templates" : "Configure the wallet deployment first");
   const saved = localStorage.getItem(accountKey(passkey));
   let account: PilotWalletDescriptor;
   if (saved) account = parsePilotWalletDescriptor(JSON.parse(saved));
@@ -568,7 +578,7 @@ async function prepareAccount(passkey: PilotPasskey): Promise<PilotWalletDescrip
       );
     account = createPilotWalletDescriptor(
       pilotPasskeyLock(passkey),
-      config.walletSession!,
+      sessionDeployment!,
       config.poolLock,
       maxFee,
       { previousOutput: seed.outPoint },
@@ -578,6 +588,7 @@ async function prepareAccount(passkey: PilotPasskey): Promise<PilotWalletDescrip
       JSON.stringify(account),
     );
   }
+  if (account.deployment.codeHash !== sessionDeployment.codeHash) throw new Error("Saved account deployment differs from selected account mode");
   if (!ccc.Script.from(account.ownerLock).eq(pilotPasskeyLock(passkey)))
     throw new Error("Saved account belongs to a different passkey owner");
   return account;
@@ -603,6 +614,7 @@ function renderPolicyChoices() {
     };
     l.append(document.createTextNode(p.name));
     const technical = node("details", undefined, policy);
+    if (p.direction === "template") node("small", `Up to ${ccc.fixedPointToString(BigInt(p.template!.maxSpend))} CKB net spending per action · wallet-enforced`, policy);
     node("summary", "View policy details", technical);
     node("pre", JSON.stringify(p, null, 2), technical);
   });
@@ -725,6 +737,7 @@ const grant = button(
         session = engine(owner, account, secret, expiresAt);
         const journal = await session.options.journal.load();
         const state: PilotWalletState = {
+          ...(generalMode ? { mode: "templates" as const } : {}),
           publicKey,
           remaining: amount.toString(),
           // grant() derives the actual sequence from the live authority after settlement.
@@ -750,7 +763,7 @@ const grant = button(
           : `Initial account funding: ${ccc.fixedPointToString(capacity)} CKB (budget plus occupied capacity).`;
         if (
           !(await confirmReview(
-            `${appOrigin}\nDestination: ${await session.getRecommendedAddress()}\n${total}\nMaximum session spending: ${budget.value} CKB.\nApprove ${approved.length} selected policies?`,
+            `${appOrigin}\nDestination: ${await session.getRecommendedAddress()}\n${total}\nMaximum session spending: ${budget.value} CKB.\n${generalMode ? "General signing: action templates are wallet-enforced. The session key can bypass these action restrictions if stolen.\n" : ""}Approve ${approved.length} selected policies?`,
           ))
         )
           throw new Error("Session approval cancelled");
@@ -1020,7 +1033,7 @@ async function renderLogs(e = session) {
   const labels = { grant: "Session approval", action: "App action", revoke: "Session revoked", recover: "Funds recovered" };
   const entries = [
     ...(journal?.receipts ?? []).map(r => ({
-      name: labels[r.kind] ?? "App action", hash: r.hash, at: r.createdAt,
+      name: r.policyName ?? labels[r.kind] ?? "App action", hash: r.hash, at: r.createdAt,
       status: r.status, onchain: true,
     })),
     ...(journal?.messages ?? []).map(m => ({
@@ -1044,7 +1057,7 @@ async function renderLogs(e = session) {
   }
 }
 function accountKey(p: PilotPasskey) {
-  return "pilot:wallet:account:" + p.publicKey + ":testnet";
+  return "pilot:wallet:account:" + p.publicKey + ":testnet" + (generalMode ? ":general" : "");
 }
 async function describeOwnerTransaction(bytes: ccc.Hex, remaining: string, fee: string) {
   const tx = ccc.Transaction.fromBytes(bytes);
@@ -1177,6 +1190,7 @@ window.addEventListener("message", (event) => {
       if (pendingConnect || connection)
         throw new Error("A connection is already active");
       const v = request.params as PilotWalletConnect & { dynamicPolicies?: boolean };
+      if (v.accountMode !== (generalMode ? "general" : undefined)) throw new Error("Account mode does not match wallet frame");
       if (v.dynamicPolicies) {
         if (params.get("accountPolicies") !== "1" || !Array.isArray(v.policies) || v.policies.length)
           throw new Error("Invalid account-policy handoff");

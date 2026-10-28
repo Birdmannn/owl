@@ -1,5 +1,5 @@
 import { PILOT_ACCOUNT_CODE_HASH } from '../src/ckb/account-code.js';
-import { PILOT_WALLET_SESSION_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH, PILOT_PASSKEY_CODE_HASH } from '../src/wallet/code.js';
+import { PILOT_WALLET_SESSION_CODE_HASH, PILOT_WALLET_GENERAL_CODE_HASH, PILOT_LEGACY_PASSKEY_CODE_HASH, PILOT_PASSKEY_CODE_HASH } from '../src/wallet/code.js';
 import { createServer, type RequestListener } from 'node:http';
 import { PostgresJournal, postgresPool } from './postgres.js';
 import { readJson, MemoryRateLimiter, requestIp, type RateLimiter } from './http.js';
@@ -63,10 +63,10 @@ export class PilotPaymaster {
     if (await inputCapacity(this.client, base) !== base.outputs.reduce((n, o) => n + o.capacity, 0n)) throw new Error('User must fund cell capacity and assets, but zero network fee');
     const cells = await Promise.all(base.inputs.map(input => this.client.getCellLive(input.previousOutput, true)));
     if (cells.some(c => !c || c.cellOutput.lock.eq(this.pool))) throw new Error('Invalid user funding input');
-    const accounts = cells.filter(c => [PILOT_ACCOUNT_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH].includes(c!.cellOutput.lock.codeHash));
+    const accounts = cells.filter(c => [PILOT_ACCOUNT_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH,PILOT_WALLET_GENERAL_CODE_HASH].includes(c!.cellOutput.lock.codeHash));
     if (accounts.length) {
       const lock = accounts[0]!.cellOutput.lock, args = ccc.bytesFrom(lock.args);
-      const modern=lock.codeHash===PILOT_WALLET_SESSION_CODE_HASH;
+      const modern=[PILOT_WALLET_SESSION_CODE_HASH,PILOT_WALLET_GENERAL_CODE_HASH].includes(lock.codeHash);
       if (lock.hashType !== 'data2' || args.length !== (modern?104:105) || ccc.hexFrom(args.slice(modern?64:65, modern?96:97)) !== this.pool.hash()
         || accounts.some(c => !c!.cellOutput.lock.eq(lock)) || base.outputs.some(o => o.lock.eq(this.pool))) throw new Error('Invalid Pilot account sponsorship');
     }
@@ -74,9 +74,9 @@ export class PilotPaymaster {
     // The registration becomes usable only after submit validates all scripts AND the funding commits.
     const registrations: string[] = []; const registrationOwners = new Set<string>();
     for (const output of base.outputs) {
-      if (![PILOT_ACCOUNT_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH].includes(output.lock.codeHash) || output.lock.hashType !== 'data2') continue;
+      if (![PILOT_ACCOUNT_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH,PILOT_WALLET_GENERAL_CODE_HASH].includes(output.lock.codeHash) || output.lock.hashType !== 'data2') continue;
       const args = ccc.bytesFrom(output.lock.args);
-      const modern=output.lock.codeHash===PILOT_WALLET_SESSION_CODE_HASH;
+      const modern=[PILOT_WALLET_SESSION_CODE_HASH,PILOT_WALLET_GENERAL_CODE_HASH].includes(output.lock.codeHash);
       if (args.length !== (modern?104:105) || ccc.hexFrom(args.slice(modern?64:65,modern?96:97)) !== this.pool.hash()) continue;
       const proof = cells.find(cell => cell!.cellOutput.lock.hash() === ccc.hexFrom(args.slice(0,32)));
       if (proof) { await assertPilotSigningOwner(this.client, proof.cellOutput.lock); registrations.push(output.lock.hash()); registrationOwners.add(proof.cellOutput.lock.hash()); }

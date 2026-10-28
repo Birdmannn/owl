@@ -1,6 +1,7 @@
 import { ccc } from "@ckb-ccc/core";
 import { MAX_ACTION_CATALOG, MAX_DELEGATED_ACTIONS } from '../limits.js';
 import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { pilotTemplateHash, matchesPilotTransactionTemplate, type PilotTransactionTemplate, type PilotTemplateEffect } from "./templates.js";
 import {
   deploymentDep,
   verifyDeployment,
@@ -17,6 +18,7 @@ import {
 } from "./passkey.js";
 import {
   PILOT_WALLET_SESSION_CODE_HASH,
+  PILOT_WALLET_GENERAL_CODE_HASH,
   PILOT_LEGACY_PASSKEY_CODE_HASH,
   PILOT_PASSKEY_CODE_HASH,
 } from "./code.js";
@@ -31,13 +33,21 @@ export const PILOT_TYPE_ID: ccc.Hex =
 const ZERO: ccc.Hex = ("0x" + "00".repeat(32)) as ccc.Hex;
 export interface PilotCellPolicy {
   name: string;
-  direction: "input" | "output" | "message";
+  direction: "input" | "output" | "message" | "template";
   lockHash: ccc.Hex;
   typeHash: ccc.Hex;
   dataHash: ccc.Hex;
   maxCapacity: string;
+  /** Present only for wallet-enforced template permissions. */
+  template?: PilotTransactionTemplate;
+}
+export function pilotTemplatePolicy(name: string, template: PilotTransactionTemplate): PilotCellPolicy {
+  return { name, direction: "template", lockHash: pilotTemplateHash(template), typeHash: ZERO,
+    dataHash: ZERO, maxCapacity: template.maxSpend === "0" ? "1" : template.maxSpend, template: structuredClone(template) };
 }
 export interface PilotWalletState {
+  /** Version-2 general account; template semantics are NOT contract-enforced. */
+  mode?: "templates";
   publicKey: ccc.Hex;
   remaining: string;
   sequence: string;
@@ -105,7 +115,7 @@ function validatePolicies(policies: readonly PilotCellPolicy[], limit: number): 
     if (
       !p.name ||
       p.name.length > 100 ||
-      !["input", "output", "message"].includes(p.direction)
+      !["input", "output", "message", "template"].includes(p.direction)
     )
       throw new Error("Invalid policy name or direction");
     for (const h of [p.lockHash, p.typeHash, p.dataHash])
@@ -114,17 +124,24 @@ function validatePolicies(policies: readonly PilotCellPolicy[], limit: number): 
     walletU64(BigInt(p.maxCapacity));
     if (BigInt(p.maxCapacity) <= 0n)
       throw new Error("Policy capacity must be positive");
+    if (p.direction === "template") {
+      if (!p.template || pilotTemplateHash(p.template) !== p.lockHash || p.typeHash !== ZERO || p.dataHash !== ZERO ||
+        p.maxCapacity !== (p.template.maxSpend === "0" ? "1" : p.template.maxSpend))
+        throw new Error("Template permission commitment mismatch");
+    } else if (p.template !== undefined) throw new Error("Template requires template direction");
   }
 }
 export function encodePilotWalletState(state: PilotWalletState): ccc.Hex {
   validatePilotPolicies(state.policies);
+  if (state.mode !== undefined && state.mode !== "templates") throw new Error("Unknown account authorization mode");
+  if (!state.mode && state.policies.some(p => p.direction === "template")) throw new Error("Templates require a general account deployment");
   canonicalWalletOrigin(state.appOrigin);
   const key = ccc.bytesFrom(state.publicKey);
   if (key.length !== 33) throw new Error("Invalid session key");
   secp256k1.Point.fromBytes(key);
   return ccc.hexFrom(
     ccc.bytesConcat(
-      [1],
+      [state.mode === "templates" ? 2 : 1],
       key,
       walletU64(BigInt(state.remaining)),
       walletU64(BigInt(state.sequence)),
@@ -132,7 +149,7 @@ export function encodePilotWalletState(state: PilotWalletState): ccc.Hex {
       [state.policies.length],
       ...state.policies.map((p) =>
         ccc.bytesConcat(
-          [p.direction === "input" ? 0 : p.direction === "output" ? 1 : 2],
+          [p.direction === "input" ? 0 : p.direction === "output" ? 1 : p.direction === "message" ? 2 : 3],
           p.lockHash,
           p.typeHash,
           p.dataHash,
@@ -145,7 +162,7 @@ export function encodePilotWalletState(state: PilotWalletState): ccc.Hex {
 export function pilotWalletLock(account: PilotWalletDescriptor): ccc.Script {
   if (
     account.version !== 2 ||
-    account.deployment.codeHash !== PILOT_WALLET_SESSION_CODE_HASH
+    ![PILOT_WALLET_SESSION_CODE_HASH, PILOT_WALLET_GENERAL_CODE_HASH].includes(account.deployment.codeHash)
   )
     throw new Error("Unsupported Pilot wallet deployment");
   const type = ccc.Script.from(account.stateType),
@@ -165,7 +182,7 @@ export function pilotWalletLock(account: PilotWalletDescriptor): ccc.Script {
   )
     throw new Error("Invalid account authority or pool");
   return ccc.Script.from({
-    codeHash: PILOT_WALLET_SESSION_CODE_HASH,
+    codeHash: account.deployment.codeHash,
     hashType: "data2",
     args: ccc.hexFrom(
       ccc.bytesConcat(
@@ -242,9 +259,14 @@ export async function validatePilotWalletEffects(
   state: PilotWalletState,
   tx: ccc.Transaction,
   ownerApproved = false,
-): Promise<{ index: number; next: PilotWalletState }> {
+): Promise<{ index: number; next: PilotWalletState; policyName?: string; policyId?: string }> {
   const lock = pilotWalletLock(account),
     type = ccc.Script.from(account.stateType);
+  const general = account.deployment.codeHash === PILOT_WALLET_GENERAL_CODE_HASH;
+  if (general !== (state.mode === "templates")) throw new Error("Account authorization mode does not match deployment");
+  const templates = state.policies.filter(p => p.direction === "template");
+  const useTemplates = general && templates.length > 0;
+  const effects: { inputs: PilotTemplateEffect[]; outputs: PilotTemplateEffect[] } = { inputs: [], outputs: [] };
   let input = 0n,
     output = 0n,
     anchorIn = -1,
@@ -262,7 +284,7 @@ export async function validatePilotWalletEffects(
     if (cell.cellOutput.lock.eq(account.poolLock))
       throw new Error("Apps cannot select pool inputs");
     if (
-      cell.cellOutput.lock.codeHash === PILOT_WALLET_SESSION_CODE_HASH &&
+      [PILOT_WALLET_SESSION_CODE_HASH, PILOT_WALLET_GENERAL_CODE_HASH].includes(cell.cellOutput.lock.codeHash) &&
       !cell.cellOutput.lock.eq(lock)
     )
       throw new Error("Do not mix Pilot wallets");
@@ -281,11 +303,13 @@ export async function validatePilotWalletEffects(
       if (
         !cell.cellOutput.type?.eq(type) &&
         (cell.cellOutput.type || cell.outputData !== "0x") &&
-        !ownerApproved &&
+        !ownerApproved && !useTemplates &&
         !permitted(state, cell.cellOutput, cell.outputData, "input")
       )
         throw new PilotPolicyApprovalRequiredError("Account asset input is outside session policies");
     }
+    if (!cell.cellOutput.type?.eq(type) && !(cell.cellOutput.lock.eq(lock) && !cell.cellOutput.type && cell.outputData === "0x"))
+      effects.inputs.push({ output: cell.cellOutput, data: cell.outputData, index: i });
   }
   for (const [i, o] of tx.outputs.entries()) {
     const data = tx.outputsData[i];
@@ -307,7 +331,8 @@ export async function validatePilotWalletEffects(
       if (o.type?.eq(type)) continue;
       if (!o.type && data === "0x") continue;
     }
-    if (!ownerApproved && !permitted(state, o, data, "output"))
+    effects.outputs.push({ output: o, data, index: i });
+    if (!ownerApproved && !useTemplates && !permitted(state, o, data, "output"))
       throw new PilotPolicyApprovalRequiredError("Output is outside session policies");
   }
   if (anchorIn < 0 || anchorOut < 0)
@@ -317,6 +342,8 @@ export async function validatePilotWalletEffects(
   const spent = input > output ? input - output : 0n;
   if (spent > BigInt(state.remaining))
     throw new Error("Session spending budget exceeded");
+  const matched = !ownerApproved && useTemplates ? templates.find(p => matchesPilotTransactionTemplate(p.template!, { ...effects, spent, tx }, lock, ccc.Script.from(account.ownerLock))) : undefined;
+  if (!ownerApproved && useTemplates && !matched) throw new PilotPolicyApprovalRequiredError("Transaction does not match an approved action template");
   const next = {
     ...state,
     remaining: (BigInt(state.remaining) - spent).toString(),
@@ -324,7 +351,7 @@ export async function validatePilotWalletEffects(
   };
   if (tx.outputsData[anchorOut] !== encodePilotWalletState(next))
     throw new Error("Session state changed or budget/sequence is incorrect");
-  return { index: first, next };
+  return { index: first, next, ...(matched ? { policyName: matched.name, policyId: matched.template!.id } : {}) };
 }
 export interface PilotWalletReceipt {
   id: string;
@@ -336,6 +363,8 @@ export interface PilotWalletReceipt {
   kind: "grant" | "action" | "revoke" | "recover";
   next?: PilotWalletState;
   approval?: "passkey";
+  policyName?: string;
+  policyId?: string;
   createdAt: number;
 }
 export interface PilotWalletJournal {
@@ -775,6 +804,7 @@ export class PilotWalletSession extends ccc.Signer {
         quote,
         status: "signed",
         kind: "action",
+        ...(checked.policyName ? { policyName: checked.policyName, policyId: checked.policyId } : {}),
         ...(ownerApproval ? { approval: "passkey" as const } : {}),
         next: checked.next,
         createdAt: Date.now(),
@@ -787,6 +817,8 @@ export class PilotWalletSession extends ccc.Signer {
   async grant(state: PilotWalletState, capacity?: bigint): Promise<ccc.Hex> {
     // Snapshot reviewed permissions/budget; sequencing is wallet-managed after settlement.
     state = structuredClone(state);
+    if (this.options.account.deployment.codeHash === PILOT_WALLET_GENERAL_CODE_HASH) state.mode = "templates";
+    else if (state.mode) throw new Error("Legacy account cannot grant general signing");
     return this.ownerOperation(
       "grant",
       async () => {
@@ -799,7 +831,7 @@ export class PilotWalletSession extends ccc.Signer {
         const anchor = await this.anchor();
         if (anchor && anchor.outputData !== "0x") {
           const bytes = ccc.bytesFrom(anchor.outputData);
-          if (bytes.length < 83 || bytes[0] !== 1 || bytes[82]! < 1 ||
+          if (bytes.length < 83 || bytes[0] !== (state.mode === "templates" ? 2 : 1) || bytes[82]! < 1 ||
               bytes[82]! > MAX_DELEGATED_ACTIONS || bytes.length !== 83 + bytes[82]! * 105)
             throw new Error("Invalid live session authority; reconcile before replacing the grant");
           const sequence = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(42, true);

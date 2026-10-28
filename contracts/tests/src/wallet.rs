@@ -317,9 +317,19 @@ fn state(key: u8, remaining: u64, sequence: u64, recipient: &Script) -> Vec<u8> 
     .concat()
 }
 fn fixture() -> F {
+    fixture_mode(false)
+}
+fn fixture_mode(general: bool) -> F {
     let mut c = Context::default();
     let root = owner(&mut c);
-    let dep = deploy(&mut c, "pilot-wallet-session-lock");
+    let dep = deploy(
+        &mut c,
+        if general {
+            "pilot-wallet-general-lock"
+        } else {
+            "pilot-wallet-session-lock"
+        },
+    );
     let d = c.deploy_cell(ALWAYS_SUCCESS.clone());
     let recipient = c.build_script(&d, Bytes::from(vec![1])).unwrap();
     let pool = c.build_script(&d, Bytes::from(vec![2])).unwrap();
@@ -343,8 +353,12 @@ fn fixture() -> F {
             .into(),
         )
         .unwrap();
-    let initial = state(1, 100 * C, 0, &recipient);
-    let next = state(1, 39 * C, 1, &recipient);
+    let mut initial = state(1, 100 * C, 0, &recipient);
+    let mut next = state(1, 39 * C, 1, &recipient);
+    if general {
+        initial[0] = 2;
+        next[0] = 2;
+    }
     let input = c.create_cell(
         CellOutput::new_builder()
             .capacity(1000 * C)
@@ -767,4 +781,96 @@ fn embedded_passkey_rejects_missing_insecure_or_contradictory_context() {
         .build()
         .as_bytes();
     assert!(verify(&c, &witnesses(signed, raw)).is_err());
+}
+
+#[test]
+fn general_signature_can_authorize_dynamic_outputs_without_exact_policy_match() {
+    let f = fixture_mode(true);
+    let old = f.tx.outputs().get(1).unwrap();
+    let changed = old
+        .clone()
+        .as_builder()
+        .lock(
+            old.lock()
+                .as_builder()
+                .args(Bytes::from(vec![99]).pack())
+                .build(),
+        )
+        .build();
+    let tx =
+        f.tx.as_advanced_builder()
+            .set_outputs(vec![
+                f.tx.outputs().get(0).unwrap(),
+                changed,
+                f.tx.outputs().get(2).unwrap(),
+            ])
+            .build();
+    // Deliberately proves the trust boundary: copied general keys can bypass software templates.
+    verify(&f.c, &session_sign(tx, 1, 0)).unwrap();
+}
+#[test]
+fn general_account_still_pins_state_budget_key_app_sequence_and_fee_sponsorship() {
+    let f = fixture_mode(true);
+    verify(&f.c, &session_sign(f.tx.clone(), 1, 0)).unwrap();
+    assert!(verify(&f.c, &session_sign(f.tx.clone(), 2, 0)).is_err());
+    for offset in [0, 1, 34, 42, 50, 83] {
+        let mut data = f.tx.outputs_data().get(0).unwrap().raw_data().to_vec();
+        data[offset] ^= 1;
+        let tx =
+            f.tx.as_advanced_builder()
+                .set_outputs_data(vec![
+                    Bytes::from(data).pack(),
+                    Bytes::new().pack(),
+                    Bytes::new().pack(),
+                ])
+                .build();
+        assert!(verify(&f.c, &session_sign(tx, 1, 0)).is_err());
+    }
+    let pool =
+        f.tx.outputs()
+            .get(2)
+            .unwrap()
+            .as_builder()
+            .capacity(1000 * C - 2000)
+            .build();
+    let tx =
+        f.tx.as_advanced_builder()
+            .set_outputs(vec![
+                f.tx.outputs().get(0).unwrap(),
+                f.tx.outputs().get(1).unwrap(),
+                pool,
+            ])
+            .build();
+    assert!(verify(&f.c, &session_sign(tx, 1, 0)).is_err());
+}
+#[test]
+fn general_owner_recovers_without_a_session_key() {
+    let mut f = fixture_mode(true);
+    let proof = f.c.create_cell(
+        CellOutput::new_builder()
+            .capacity(500 * C)
+            .lock(f.root.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let tx = TransactionBuilder::default()
+        .input(f.tx.inputs().get(0).unwrap())
+        .input(CellInput::new_builder().previous_output(proof).build())
+        .output(
+            CellOutput::new_builder()
+                .capacity(1500 * C - 500)
+                .lock(f.root.clone())
+                .build(),
+        )
+        .output_data(Bytes::new())
+        .witness(
+            WitnessArgs::new_builder()
+                .lock(Some(Bytes::from(vec![0])).pack())
+                .build()
+                .as_bytes(),
+        )
+        .witness(WitnessArgs::default().as_bytes())
+        .build();
+    let tx = complete(&mut f.c, tx);
+    verify(&f.c, &passkey_sign(tx, 1, None, ORIGIN, 5, false)).unwrap();
 }

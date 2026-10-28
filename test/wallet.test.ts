@@ -20,6 +20,7 @@ import {
   createPilotWalletDescriptor,
   encodePilotWalletState,
   pilotWalletLock,
+  pilotTemplatePolicy,
   parsePilotWalletDescriptor,
   pilotWalletDigest,
   validatePilotWalletEffects,
@@ -47,6 +48,7 @@ import {
   PILOT_LEGACY_PASSKEY_CODE_HASH,
   PILOT_PASSKEY_CODE_HASH,
   PILOT_WALLET_SESSION_CODE_HASH,
+  PILOT_WALLET_GENERAL_CODE_HASH,
 } from "../src/wallet/code.js";
 import {
   isPilotWalletEnvelope,
@@ -93,7 +95,7 @@ function assertion(
     signature: ccc.hexFrom(sig),
   };
 }
-async function fixture(t: TestContext, initial = true) {
+async function fixture(t: TestContext, initial = true, general = false) {
   const client = new ccc.ClientPublicTestnet();
   const pool = (
     await new ccc.SignerCkbPrivateKey(client, h(2)).getRecommendedAddressObj()
@@ -110,7 +112,7 @@ async function fixture(t: TestContext, initial = true) {
     outPoint: { txHash: h(n), index: 0 },
   });
   const ownerDeployment = deploy(PILOT_PASSKEY_CODE_HASH, 8),
-    sessionDeployment = deploy(PILOT_WALLET_SESSION_CODE_HASH, 9);
+    sessionDeployment = deploy(general ? PILOT_WALLET_GENERAL_CODE_HASH : PILOT_WALLET_SESSION_CODE_HASH, 9);
   const cells: ccc.Cell[] = [];
   const all: ccc.Cell[] = [];
   const receipts = new Map<
@@ -119,7 +121,7 @@ async function fixture(t: TestContext, initial = true) {
   >();
   for (const [d, name] of [
     [ownerDeployment, "pilot-passkey-lock"],
-    [sessionDeployment, "pilot-wallet-session-lock"],
+    [sessionDeployment, general ? "pilot-wallet-general-lock" : "pilot-wallet-session-lock"],
   ] as const) {
     const cell = ccc.Cell.from({
       outPoint: d.outPoint,
@@ -234,6 +236,7 @@ async function fixture(t: TestContext, initial = true) {
     },
   ];
   const state: PilotWalletState = {
+    ...(general ? {mode: "templates" as const} : {}),
     publicKey: ccc.hexFrom(secp256k1.getPublicKey(ccc.bytesFrom(h(1)), true)),
     remaining: ccc.fixedPointFrom(200).toString(),
     sequence: "0",
@@ -927,4 +930,72 @@ test("an unfunded account cannot approve initial funding greater than the owner 
   await assert.rejects(f.session.grant({...f.state, remaining:ccc.fixedPointFrom(1_000_000).toString()}, ccc.fixedPointFrom(1_001_000)), /Insufficient CKB/);
   assert.equal(f.signs, 0);
   assert.equal(f.journal.receipts.length, 0);
+});
+
+
+test("general wallet signs repeated dynamic instances using committed software templates without owner prompts", async t => {
+  const f = await fixture(t, false, true);
+  const { pilotTemplateFromExample } = await import('../src/wallet/templates.js');
+  const contract = h(77);
+  const output = (args: ccc.Hex) => ccc.Transaction.from({outputs: [{
+    lock: f.recipient, type: {codeHash: contract, hashType: "data2", args}, capacity: ccc.fixedPointFrom(200),
+  }], outputsData: [f.session.lock.hash()]});
+  const example = await pilotTemplateFromExample(f.client, output('0x01'), {id: 'publish', maxSpend: ccc.fixedPointFrom(200).toString()});
+  assert.equal(example.outputs[0]!.type && typeof example.outputs[0]!.type === 'object' && example.outputs[0]!.type.args.equals, '0x01');
+  // Explicitly permit future instances, while pinning contract, recipient and beneficiary.
+  const template = structuredClone(example);
+  template.outputs[0]!.type = {codeHash: contract, hashType: 'data2', args: {length: 1}};
+  template.outputs[0]!.data = {length: 32, fields: [{offset: 0, value: 'accountLockHash'}]};
+  const policy = pilotTemplatePolicy('Publish freight', template);
+  const state = {...f.state, remaining: ccc.fixedPointFrom(600).toString(), policies: [policy]};
+  await f.session.grant(state, ccc.fixedPointFrom(1200));
+  const signs = f.signs;
+  for (const args of ['0x01','0x02'] as const) {
+    const prepared = await f.session.prepareAppTransaction(output(args));
+    const hash = await f.session.sendTransaction(prepared, `publish-${args}`);
+    assert.equal(await f.session.sendTransaction(prepared, `publish-${args}`), hash);
+  }
+  assert.equal(f.signs, signs);
+  assert.equal(f.journal.state!.remaining, ccc.fixedPointFrom(200).toString());
+  assert.equal(f.journal.receipts.at(-1)!.policyName, 'Publish freight');
+  assert.equal(f.journal.receipts.at(-1)!.policyId, 'publish');
+  assert.equal(f.journal.state!.mode, 'templates');
+  const badOwner = output('0x03'); badOwner.outputsData[0] = h(1);
+  await assert.rejects(f.session.prepareAppTransaction(badOwner), /approved action template/);
+  const badContract = output('0x03'); badContract.outputs[0]!.type!.codeHash = h(78);
+  await assert.rejects(f.session.prepareAppTransaction(badContract), /approved action template/);
+  const extra = output('0x03'); extra.addOutput({lock: f.recipient, capacity: ccc.fixedPointFrom(61)}, '0x');
+  await assert.rejects(f.session.prepareAppTransaction(extra), /spending budget|approved action template/);
+  const raised = output('0x03'); raised.outputs[0]!.capacity += 1n;
+  await assert.rejects(f.session.prepareAppTransaction(raised), /spending budget|approved action template/);
+  const edited = structuredClone(f.journal);
+  edited.state!.policies[0]!.template!.maxSpend = ccc.fixedPointFrom(1000).toString();
+  await f.options.journal.save(edited);
+  await assert.rejects(f.session.prepareAppTransaction(output('0x03')), /commitment mismatch/);
+});
+
+test("legacy locks reject template grants", async t => {
+  const f = await fixture(t, false);
+  const policy = pilotTemplatePolicy('Pay', {version: 1, id: 'pay', maxSpend: ccc.fixedPointFrom(61).toString(), inputs: [], outputs: [{role: 'recipient', lock: {codeHash: f.recipient.codeHash, hashType: f.recipient.hashType, args: {equals: f.recipient.args}}, type: null, data: {length: 0}}]});
+  await assert.rejects(f.session.grant({...f.state, policies: [policy]}, ccc.fixedPointFrom(1200)), /general account deployment/);
+  assert.equal(f.signs, 0);
+});
+
+test("general account reconciles uncertain signatures before keyless owner recovery", async t => {
+  const f = await fixture(t, true, true);
+  const tx = await f.payment();
+  f.setLose(true);
+  await assert.rejects(f.session.sendTransaction(tx, 'general-lost'), /Lost response/);
+  const signed = f.journal.receipts.at(-1)!;
+  assert.equal(signed.status, 'signed');
+  await assert.rejects(f.session.recover(), /Lost response/);
+  f.setLose(false);
+  const restored = new PilotWalletSession({...f.options, sessionKey: h(55)});
+  await restored.recover();
+  const recovered = ccc.Transaction.fromBytes(f.journal.receipts.find(r => r.id === 'general-lost')!.bytes);
+  const before = ccc.Transaction.fromBytes(signed.bytes);
+  assert.equal(recovered.hash(), before.hash());
+  assert.equal(recovered.getWitnessArgs(0)?.lock, before.getWitnessArgs(0)?.lock);
+  assert.equal(f.journal.receipts.find(r => r.id === 'general-lost')!.status, 'confirmed');
+  assert.equal(f.journal.receipts.at(-1)!.kind, 'recover');
 });

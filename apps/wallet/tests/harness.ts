@@ -20,6 +20,7 @@ document.querySelector("button")!.onclick = () =>
   void provider
     .connect({
       name: "External test app",
+      ...(new URLSearchParams(location.search).has("general") ? {accountMode: "general" as const} : {}),
       budget: ccc.fixedPointFrom(10).toString(),
       ...(dynamic ? { buildPolicies } : { policies: Array.from({ length: catalogSize }, (_, i) => (
         {

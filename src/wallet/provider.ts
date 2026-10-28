@@ -12,6 +12,8 @@ export interface PilotWalletConnect {
   policies: readonly PilotCellPolicy[];
   budget: string;
   durationMs?: number;
+  /** General account uses wallet-enforced action templates; requires its separate deployment. */
+  accountMode?: "general";
 }
 export interface PilotWalletConnection {
   address: string;
@@ -72,6 +74,7 @@ export class PilotWalletProvider {
   private disposed = false;
   private approvalRequest?: { id: string; opened: boolean };
   private policyBuilder?: PilotWalletPolicyBuilder;
+  private generalAccount = false;
   constructor(
     readonly options: { url: string; timeoutMs?: number; styleNonce?: string },
   ) {
@@ -102,6 +105,7 @@ export class PilotWalletProvider {
       const channel = this.channel;
       void Promise.resolve().then(() => builder(structuredClone(selection.account))).then(policies => {
         validatePilotPolicyCatalog(policies);
+        if (!this.generalAccount && policies.some(p => p.direction === "template")) throw new PilotError("Action templates require accountMode: general and its deployment");
         return { policies };
       }).catch(error => ({ error: formatPilotError(error) })).then(result => {
         if (this.disposed || channel !== this.channel || !this.pending.has(v.id)) return;
@@ -241,6 +245,10 @@ export class PilotWalletProvider {
           "Pilot is already open; finish or disconnect the existing connection before reconnecting",
         );
       }
+      if (request.accountMode !== undefined && request.accountMode !== "general") throw new PilotError("Unknown account mode");
+      if (!dynamic && !request.accountMode && request.policies.some(p => p.direction === "template"))
+        throw new PilotError("Action templates require accountMode: general and its deployment");
+      this.generalAccount = request.accountMode === "general";
       this.channel = crypto.randomUUID();
       this.policyBuilder = dynamic ? request.buildPolicies : undefined;
       const url = new URL(this.options.url);
@@ -249,6 +257,7 @@ export class PilotWalletProvider {
       url.searchParams.set("embed", "1");
       url.searchParams.set("progress", "1");
       if (dynamic) url.searchParams.set("accountPolicies", "1");
+      if (request.accountMode) url.searchParams.set("accountMode", request.accountMode);
       const ready = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           this.ready = undefined;
@@ -273,7 +282,7 @@ export class PilotWalletProvider {
       await ready;
       const connection = (await this.request(
         "connect",
-        dynamic ? { name: request.name, budget: request.budget, durationMs: request.durationMs,
+        dynamic ? { name: request.name, budget: request.budget, durationMs: request.durationMs, accountMode: request.accountMode,
           policies: [], dynamicPolicies: true } : request,
       )) as PilotWalletConnection;
       if (

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["session-lock", "delegation-lock", "sponsored-session-lock", "sponsored-delegation-lock", "account-lock", "passkey-lock", "wallet-session-lock", "tests"]
+members = ["session-lock", "delegation-lock", "sponsored-session-lock", "sponsored-delegation-lock", "account-lock", "passkey-lock", "wallet-session-lock", "wallet-general-lock", "tests"]
 
 [profile.release]
 opt-level = "s"

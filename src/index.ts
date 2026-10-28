@@ -22,3 +22,4 @@ export * from './wallet/code.js';
 export * from './wallet/passkey.js';
 export * from './wallet/session.js';
 export * from './wallet/provider.js';
+export * from './wallet/templates.js';

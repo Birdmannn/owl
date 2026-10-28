@@ -118,6 +118,19 @@ test("account-specific policies are built before approval and rebuilt after acco
   expect(second.ownerAddress).not.toBe(first.ownerAddress);
   expect(second.address).not.toBe(first.address);
 });
+test("general mode discloses software enforcement and cannot silently fall back to the deployed restricted account", async ({ page, context }) => {
+  await page.goto("http://localhost:5177/tests/app.html?dynamic=1&general=1");
+  await page.getByRole("button", {name: "Connect Pilot", exact: true}).click();
+  const wallet = await enterPilot(page);
+  const frame = page.frames().find(f => f.url().startsWith("http://localhost:5176/"))!;
+  await authenticator(context, frame);
+  await wallet.getByLabel("Account name", {exact: true}).fill("General account");
+  await wallet.getByRole("button", {name: "Create Pilot passkey", exact: true}).click();
+  await expect(wallet.getByText(/General signing account: Pilot checks selected action templates/)).toBeVisible();
+  await expect(wallet.locator("#error")).toContainText("General account lock is not deployed");
+  await expect(wallet.getByRole("button", {name: "Approve session with passkey"})).toBeDisabled();
+  expect(await frame.evaluate(() => Object.keys(localStorage).some(k => k.startsWith("pilot:wallet:account:")))).toBe(false);
+});
 test('hosted app offers 50 policies and the user selects at most 16', async ({ page, context }) => {
   await page.goto('http://localhost:5177/tests/app.html?catalog=50');
   await page.getByRole('button', { name: 'Connect Pilot', exact: true }).click();

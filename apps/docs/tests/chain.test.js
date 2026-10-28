@@ -112,3 +112,15 @@ test('board keeps original passkey owners visible after embedded owner revision'
  const {tx,previous}=fixture(t);const policy=boardPolicies.find(p=>p.id==='passkey-legacy');const owner=ccc.Script.from({codeHash:policy.codeHash,hashType:'data2',args:'0x'+'22'.repeat(97)});tx.outputs[0].lock=owner;previous.outputs[0].lock=owner;tx.setWitnessArgs(0,{lock:'0x00'+'33'.repeat(300)});
  const {rows}=await loadBoardPage();assert.equal(rows[0].action,'Passkey owner transaction');assert.equal(rows[0].signer,'Pilot passkey');assert.deepEqual(rows[0].details.ownerLockHashes,[owner.hash()]);assert.equal(rows[0].session,'');
 });
+
+test('board includes general signing account receipts without treating config bytes as a session public key', async t => {
+  const {tx, previous} = fixture(t);
+  const policy = boardPolicies.find(p => p.id === 'wallet-general-v1');
+  const lock = ccc.Script.from({codeHash: policy.codeHash, hashType: 'data2', args: '0x' + '11'.repeat(104)});
+  tx.outputs[0].lock = lock; previous.outputs[0].lock = lock;
+  const {rows} = await loadBoardPage();
+  assert.equal(rows[0].action, 'Wallet session action');
+  assert.equal(rows[0].signer, 'Pilot session key');
+  assert.equal(rows[0].session, '');
+  assert.deepEqual(rows[0].details.ownerLockHashes, [hash('11')]);
+});

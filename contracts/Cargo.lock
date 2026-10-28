@@ -1470,6 +1470,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pilot-wallet-general-lock"
+version = "0.1.0"
+dependencies = [
+ "blake2b-ref",
+ "ckb-std",
+ "k256",
+]
+
+[[package]]
 name = "pilot-wallet-session-lock"
 version = "0.1.0"
 dependencies = [

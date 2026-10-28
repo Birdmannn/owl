@@ -216,14 +216,14 @@ test('persistent account sponsorship binds the pool and charges its owner bucket
  await assert.rejects(service.quote(ccc.hexFrom(base.toBytes())),/Invalid Pilot account/);
 });
 
-test('passkey wallet sponsorship requires confirmed owner funding and preserves the full owner quota',async t=>{
+for (const general of [false, true]) test(`passkey ${general ? 'general' : 'restricted'} wallet sponsorship requires confirmed owner funding and preserves owner quota`,async t=>{
  const {p256}=await import('@noble/curves/nist.js');const{sha256}=await import('@noble/hashes/sha2.js');
- const {pilotPasskeyLock,pilotPasskeyDigest,encodePilotAssertion,base64url,verifyPilotAssertion,createPilotWalletDescriptor,pilotWalletLock,PILOT_PASSKEY_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH}=await import('../src/index.js');
+ const {pilotPasskeyLock,pilotPasskeyDigest,encodePilotAssertion,base64url,verifyPilotAssertion,createPilotWalletDescriptor,pilotWalletLock,PILOT_PASSKEY_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH,PILOT_WALLET_GENERAL_CODE_HASH}=await import('../src/index.js');
  const f=await fixture(t);const identity={credentialId:'AQID',publicKey:ccc.hexFrom(p256.getPublicKey(ccc.bytesFrom(hash(3)),true)),rpId:'wallet.example',origin:'https://wallet.example',name:'Alice'};
  const owner=pilotPasskeyLock(identity);const proof=ccc.Cell.from({outPoint:{txHash:hash(41),index:0},cellOutput:{lock:owner,capacity:ccc.fixedPointFrom(1000)},outputData:'0x'});f.cells.push(proof);
- const deployment:Deployment={network:'testnet',genesisHash:hash(8),codeHash:PILOT_WALLET_SESSION_CODE_HASH,outPoint:{txHash:hash(9),index:0}};
+ const deployment:Deployment={network:'testnet',genesisHash:hash(8),codeHash:general?PILOT_WALLET_GENERAL_CODE_HASH:PILOT_WALLET_SESSION_CODE_HASH,outPoint:{txHash:hash(9),index:0}};
  const descriptor=createPilotWalletDescriptor(owner,deployment,f.pool,100000n,{previousOutput:proof.outPoint});const lock=pilotWalletLock(descriptor);f.app.cellOutput.lock=lock;f.app.outputData='0x';
- const service=await PilotPaymaster.create({...f.paymaster.options,allowedCodeHashes:[PILOT_PASSKEY_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH]});
+ const service=await PilotPaymaster.create({...f.paymaster.options,allowedCodeHashes:[PILOT_PASSKEY_CODE_HASH,PILOT_WALLET_SESSION_CODE_HASH,PILOT_WALLET_GENERAL_CODE_HASH]});
  const action=ccc.Transaction.from({inputs:[{previousOutput:f.app.outPoint}],outputs:[f.app.cellOutput],outputsData:['0x']});action.setWitnessArgs(0,{lock:ccc.hexFrom(ccc.bytesConcat([1],new Uint8Array(64)))});
  await assert.rejects(service.quote(ccc.hexFrom(action.toBytes())),/confirmed owner-authorized funding/);
  const setup=ccc.Transaction.from({inputs:[{previousOutput:proof.outPoint}],outputs:[{lock,capacity:proof.cellOutput.capacity}],outputsData:['0x']});setup.setWitnessArgs(0,{lock:ccc.hexFrom(new Uint8Array(620))});
