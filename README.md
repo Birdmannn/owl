@@ -466,6 +466,8 @@ For a new account, fund the passkey owner first: its initial live funding input 
 
 Builder errors stay in the modal for retry; `connect()` remains pending until successful grant/resume or provider disposal. Fixed-policy `connect({ policies, ... })` remains supported. Update/reinstall the SDK in the integrating app and redeploy `apps/wallet` together for this handoff; no on-chain contract deployment is required. It resolves address-dependent policy construction, not blanket authorization of unknown future contract instances. The session remains unapproved until the user completes review.
 
+The embedded Pilot modal hides scrollbars throughout its screens and expanded panels while preserving scrolling by wheel, touch and keyboard.
+
 ## General signing with wallet-enforced action templates
 
 Pilot now also implements an opt-in general account mode. The general-account lock is deployed and verified live on CKB testnet as of 2026-10-28. Its code hash matches the SDK pin; the deployment outpoint is recorded under `walletGeneral` in `deployments/pilot-sponsored.json`. Rebuild/redeploy the wallet and paymaster with that record and update integrating apps to activate general mode. Hosted end-to-end signing with this deployment has not yet been verified. The existing exact-cell-policy account and its deployment are unchanged; the current passkey owner lock is reused.

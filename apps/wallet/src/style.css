@@ -138,6 +138,8 @@ html:not(.embedded) .profile-card,
 html:not(.embedded) .modal-heading,
 html:not(.embedded) .modal-back { display: none; }
 .embedded, .embedded body { background: #192e23; }
+.embedded, .embedded * { scrollbar-width: none; }
+.embedded::-webkit-scrollbar, .embedded *::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .embedded main { max-width: 510px; padding: 28px; }
 .embedded .wallet-header { height: 54px; border: 0; margin-bottom: 14px; }
 .embedded .brand img { width: 32px; height: 32px; }
