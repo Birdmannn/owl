@@ -34,6 +34,14 @@ export interface PilotTemplateField {
   offset?: number;
   length?: number;
 }
+/** `each` resolves to the current occurrence of the declared input/output role. */
+export type PilotTemplateRepeatedField = Omit<PilotTemplateField, "index"> & { index?: number | "each" };
+export interface PilotTemplateForEach {
+  inputRole: string;
+  outputRole: string;
+  /** Roles pair by occurrence order, with equal counts; all comparisons run for every pair. */
+  relations: readonly { left: PilotTemplateRepeatedField; right: PilotTemplateRepeatedField }[];
+}
 export interface PilotTransactionTemplate {
   version: 1;
   id: string;
@@ -42,6 +50,7 @@ export interface PilotTransactionTemplate {
   inputs: readonly PilotTemplateCell[];
   outputs: readonly PilotTemplateCell[];
   relations?: readonly { left: PilotTemplateField; right: PilotTemplateField }[];
+  forEach?: readonly PilotTemplateForEach[];
   witnesses?: readonly {
     inputRole: string;
     index?: number;
@@ -90,7 +99,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 export function validatePilotTransactionTemplate(t: PilotTransactionTemplate): void {
-  keys(t, ["version", "id", "maxSpend", "inputs", "outputs", "relations", "witnesses"]);
+  keys(t, ["version", "id", "maxSpend", "inputs", "outputs", "relations", "forEach", "witnesses"]);
   requireRule(t && t.version === 1 && typeof t.id === "string" && /^[a-zA-Z0-9_.:-]{1,100}$/.test(t.id) && amount(t.maxSpend));
   requireRule(Array.isArray(t.inputs) && Array.isArray(t.outputs) && t.inputs.length <= 32 && t.outputs.length > 0 && t.outputs.length <= 32);
   for (const rules of [t.inputs, t.outputs]) {
@@ -116,19 +125,36 @@ export function validatePilotTransactionTemplate(t: PilotTransactionTemplate): v
     }
   }
   requireRule(t.relations === undefined || (Array.isArray(t.relations) && t.relations.length <= 64));
-  for (const relation of t.relations ?? []) {
+  const validateRelation = (relation: { left: PilotTemplateRepeatedField; right: PilotTemplateRepeatedField }, group?: PilotTemplateForEach) => {
     keys(relation, ["left", "right"]);
     for (const f of [relation.left, relation.right]) {
       keys(f, ["source", "role", "index", "field", "offset", "length"]);
       requireRule(f && ["input", "output"].includes(f.source) && ["lock", "type", "data", "capacity", "lockArgs", "typeArgs"].includes(f.field));
       requireRule((f.source === "input" ? t.inputs : t.outputs).some(r => r.role === f.role));
-      requireRule(f.index === undefined || uint(f.index));
+      if (f.index === "each") requireRule(group && f.role === (f.source === "input" ? group.inputRole : group.outputRole));
+      else requireRule(f.index === undefined || uint(f.index));
       requireRule(f.offset === undefined || uint(f.offset));
       requireRule(f.length === undefined || uint(f.length));
       if (f.field === "capacity") requireRule(f.offset === undefined && f.length === undefined);
     }
     requireRule((relation.left.field === "capacity") === (relation.right.field === "capacity"));
+    if (group) requireRule(relation.left.index === "each" || relation.right.index === "each");
+  };
+  for (const relation of t.relations ?? []) validateRelation(relation);
+  requireRule(t.forEach === undefined || (Array.isArray(t.forEach) && t.forEach.length <= 32));
+  let repeatedComparisons = 0;
+  const pairs = new Set<string>();
+  for (const group of t.forEach ?? []) {
+    keys(group, ["inputRole", "outputRole", "relations"]);
+    const input = t.inputs.find(r => r.role === group.inputRole), output = t.outputs.find(r => r.role === group.outputRole);
+    requireRule(input && output && !pairs.has(`${group.inputRole}:${group.outputRole}`));
+    pairs.add(`${group.inputRole}:${group.outputRole}`);
+    requireRule(Array.isArray(group.relations) && group.relations.length > 0 && group.relations.length <= 64);
+    // Bound expanded work independently of the number of roles/groups.
+    repeatedComparisons += Math.min(input.max ?? 1, output.max ?? 1) * group.relations.length;
+    for (const relation of group.relations) validateRelation(relation, group);
   }
+  requireRule(repeatedComparisons <= 4096);
   requireRule(t.witnesses === undefined || (Array.isArray(t.witnesses) && t.witnesses.length <= 64));
   for (const w of t.witnesses ?? []) {
     keys(w, ["inputRole", "index", "field", "equals", "prefix"]);
@@ -215,6 +241,17 @@ export function matchesPilotTransactionTemplate(
   for (const r of t.relations ?? []) {
     const left = field(r.left), right = field(r.right);
     if (left === undefined || right === undefined || left !== right) return false;
+  }
+  for (const group of t.forEach ?? []) {
+    const inputs = roles.input.get(group.inputRole) ?? [], outputs = roles.output.get(group.outputRole) ?? [];
+    if (inputs.length !== outputs.length) return false;
+    for (let index = 0; index < inputs.length; index++) {
+      const resolve = (f: PilotTemplateRepeatedField): PilotTemplateField => ({ ...f, index: f.index === "each" ? index : f.index });
+      for (const relation of group.relations) {
+        const left = field(resolve(relation.left)), right = field(resolve(relation.right));
+        if (left === undefined || right === undefined || left !== right) return false;
+      }
+    }
   }
   for (const w of t.witnesses ?? []) {
     const items = roles.input.get(w.inputRole);

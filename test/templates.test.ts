@@ -82,3 +82,58 @@ test('script and data byte fields bind account-specific prefixes without fixing 
   f.e.outputs[0]!.output.lock.args = `${owner.hash().slice(0,42)}ff` as ccc.Hex;
   assert.equal(f.match(), false);
 });
+
+function batchFixture(count: number) {
+  const f = fixture();
+  f.t.id = 'distribution';
+  f.t.outputs = [f.t.outputs[0]!, {role: 'winner', min: 1, max: 64,
+    lock: {codeHash: h(8), hashType: 'data2', args: {length: 1}}, type: null, data: {length: 3}}];
+  f.t.inputs = [...f.t.inputs, {...f.t.outputs[1]!, data: {length: 3}}];
+  f.t.forEach = [{inputRole: 'winner', outputRole: 'winner', relations: [
+    {left: {source:'input',role:'winner',index:'each',field:'lock'},right:{source:'output',role:'winner',index:'each',field:'lock'}},
+    {left: {source:'input',role:'winner',index:'each',field:'data',offset:0,length:2},right:{source:'output',role:'winner',index:'each',field:'data',offset:0,length:2}},
+    {left: {source:'input',role:'winner',index:'each',field:'data',offset:0,length:1},right:{source:'input',role:'campaign',field:'data',offset:0,length:1}},
+  ]}];
+  f.e.outputs.splice(1);
+  for(let i=0;i<count;i++) {
+    const output=ccc.CellOutput.from({lock:script(8,ccc.hexFrom([i])),capacity:ccc.fixedPointFrom(200)});
+    f.e.inputs.push({output,data:ccc.hexFrom([1,i,0]),index:i+1});
+    f.e.outputs.push({output:output.clone(),data:ccc.hexFrom([1,i,1]),index:i+1});
+  }
+  return f;
+}
+test('one repeated-entry template checks every pair and shared context across variable batches up to 64',()=>{
+  for(const count of [1,2,8,9,16,32,64]) assert.equal(batchFixture(count).match(),true,`batch ${count}`);
+  assert.equal(batchFixture(0).match(),false);
+  assert.equal(batchFixture(65).match(),false);
+});
+test('repeated relations reject changed last recipients, identities, campaign links, missing, extra and duplicated outputs',()=>{
+  const cases=[
+    (f:ReturnType<typeof batchFixture>)=>{f.e.outputs[16]!.output.lock.args='0xff';},
+    (f:ReturnType<typeof batchFixture>)=>{f.e.outputs[16]!.data='0x01ff01';},
+    (f:ReturnType<typeof batchFixture>)=>{f.e.inputs[16]!.data='0x021000';f.e.outputs[16]!.data='0x021001';},
+    (f:ReturnType<typeof batchFixture>)=>{f.e.outputs.pop();},
+    (f:ReturnType<typeof batchFixture>)=>{f.e.outputs.push({...f.e.outputs[1]!});},
+    (f:ReturnType<typeof batchFixture>)=>{f.e.outputs[16]={...f.e.outputs[1]!};},
+    (f:ReturnType<typeof batchFixture>)=>{[f.e.outputs[1],f.e.outputs[16]]=[f.e.outputs[16]!,f.e.outputs[1]!];},
+  ];
+  for(const mutate of cases){const f=batchFixture(16);mutate(f);assert.equal(f.match(),false);}
+});
+test('repeated schema rejects invalid iterators, unknown rules and excessive expanded work; commitments bind repeated rules',()=>{
+  const original=batchFixture(2).t;
+  const bad=(fn:(t:PilotTransactionTemplate)=>void)=>{const t=structuredClone(original);fn(t);assert.throws(()=>validatePilotTransactionTemplate(t),/Invalid transaction template/);};
+  bad(t=>{t.forEach![0]!.inputRole='missing';});
+  bad(t=>{t.forEach![0]!.relations[0]!.left.role='campaign';});
+  bad(t=>{t.forEach![0]!.relations=[];});
+  bad(t=>{t.forEach=[...t.forEach!,...t.forEach!];});
+  bad(t=>{t.relations=[t.forEach![0]!.relations[0] as never];});
+  bad(t=>{(t.forEach![0] as unknown as Record<string,unknown>).allowMissing=true;});
+  bad(t=>{t.forEach![0]!.relations=[{left:{source:'input',role:'campaign',field:'lock'},right:{source:'output',role:'campaign',field:'lock'}}];});
+  bad(t=>{t.forEach![0]!.relations=[{left:{source:'input',role:'winner',index:'each',field:'capacity'},right:{source:'output',role:'winner',index:'each',field:'data'}}];});
+  const changed=structuredClone(original);changed.forEach![0]!.relations=changed.forEach![0]!.relations.slice(1);
+  assert.notEqual(pilotTemplateHash(original),pilotTemplateHash(changed));
+  const huge=structuredClone(original);huge.inputs=[...huge.inputs,{...huge.inputs[1]!,role:'other'}];huge.outputs=[...huge.outputs,{...huge.outputs[1]!,role:'other'}];
+  const group=huge.forEach![0]!;group.relations=Array.from({length:64},()=>group.relations[0]!);
+  huge.forEach=[group,{inputRole:'other',outputRole:'other',relations:[{left:{source:'input',role:'other',index:'each',field:'lock'},right:{source:'output',role:'other',index:'each',field:'lock'}}]}];
+  assert.throws(()=>validatePilotTransactionTemplate(huge),/Invalid transaction template/);
+});

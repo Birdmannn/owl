@@ -83,6 +83,36 @@ witnesses: [{ inputRole: 'campaign', field: 'outputType', equals: '0x03' }],
 
 The SDK checks templates before signing and again against the submitted prepared effects. A changed policy body must match its canonical hash commitment or fail. The on-chain grant commits the template hashes and per-policy amounts without interpreting their bodies; templates remain in the wallet journal. Names alone never approve spending. Lost-response retries use the same prepared bytes and action ID and reconcile saved signatures before new spending. Receipts record the matched action name/id for the profile.
 
+## Variable-size batches
+
+Use `forEach` to apply the same equality constraints to every paired input/output occurrence. One permission can cover 1–64 entries, without separate templates for each size or manually expanding every comparison. This is wallet-enforced like the other template rules; no general-lock or integrating-contract redeployment is needed.
+
+```ts
+// Both role definitions use { role: 'winner', min: 1, max: 64, ... }.
+forEach: [{
+  inputRole: 'winner',
+  outputRole: 'winner',
+  relations: [{
+    left:  { source: 'input',  role: 'winner', index: 'each', field: 'lock' },
+    right: { source: 'output', role: 'winner', index: 'each', field: 'lock' },
+  }, {
+    left:  { source: 'input',  role: 'winner', index: 'each', field: 'data', offset: 0, length: 20 },
+    right: { source: 'output', role: 'winner', index: 'each', field: 'data', offset: 0, length: 20 },
+  }, {
+    left:  { source: 'input', role: 'winner', index: 'each', field: 'data', offset: 20, length: 8 },
+    right: { source: 'input', role: 'campaign', field: 'data', offset: 0, length: 8 },
+  }],
+}]
+```
+
+Pairing follows occurrence order within each role, not absolute transaction indices or identity lookup. Counts must be equal. `index: 'each'` is valid only for the group's input/output roles; ordinary numeric indices and singleton references can supply shared context. Every relation must reference `each` on at least one side. Ordinary `relations` still require a numeric index for repeated roles. Lock equality compares the full lock hash. Choose data slices for the application's actual identity layout; the offsets above are illustrative, not a universal format.
+
+All application effects still match exactly one role. Missing/extra counterparts, redirected recipients or identity changes fail the corresponding comparisons. If reordering changes a compared field, it also fails; the engine does not sort or search for a matching recipient. The rule does not independently enforce unique identity values: bind sufficient identity fields and rely on the app contract for any domain-specific uniqueness, reward arithmetic or winner-selection requirements. Role bounds apply before iteration; empty groups are allowed only when both roles explicitly permit zero entries.
+
+Limits: 32 groups, 64 comparisons per group and 4,096 worst-case expanded comparisons across all groups. The expansion bound uses each group's smaller input/output maximum. The existing 64 ordinary comparisons and 64 occurrences per role remain unchanged. Unknown properties and invalid iterator references fail closed. All repeated rules enter the canonical policy commitment.
+
+Redeploy the wallet with the updated matcher and install the updated SDK in integrating apps and receiving message verifiers. Older matchers reject the new schema. Changing from fixed-size templates changes permissions: users must explicitly review a replacement grant after pending receipts settle; existing grants are not silently broadened. The current single-session rule remains unchanged. FON now uses one **Distribute rewards** template for 1–64 raffle winners, preserving each entry's lock and identity and binding it to the campaign. Tests use real FON transaction builders with mocked chain data; live distribution remains to be verified after redeployment.
+
 ## Starting from an example
 
 `await pilotTemplateFromExample(client, appTransaction, { id, maxSpend })` reads live example inputs and creates exact script arguments, exact cell capacities, complete data prefixes/lengths and present input/output type witnesses. It does **not** infer which fields are safe to vary. Explicitly relax the intended fields, add ownership/cross-cell constraints, then wrap it with `pilotTemplatePolicy` before approval. An input/output example with the same keys is insufficient: recipients, ownership, witnesses, data and amounts must be constrained. Build examples before wallet funding/change/authority completion.
