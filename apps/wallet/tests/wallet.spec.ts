@@ -118,7 +118,11 @@ test("account-specific policies are built before approval and rebuilt after acco
   expect(second.ownerAddress).not.toBe(first.ownerAddress);
   expect(second.address).not.toBe(first.address);
 });
-test("general mode discloses software enforcement and cannot silently fall back to the deployed restricted account", async ({ page, context }) => {
+test("general mode discloses software enforcement and requires owner funding", async ({ page, context }) => {
+  await page.route("https://testnet.ckb.dev/**", route => {
+    const r=route.request().postDataJSON();
+    return route.fulfill({json:{jsonrpc:"2.0",id:r.id,result:r.method === "get_cells" ? {last_cursor:"0x",objects:[]} : null}});
+  });
   await page.goto("http://localhost:5177/tests/app.html?dynamic=1&general=1");
   await page.getByRole("button", {name: "Connect Pilot", exact: true}).click();
   const wallet = await enterPilot(page);
@@ -127,7 +131,7 @@ test("general mode discloses software enforcement and cannot silently fall back 
   await wallet.getByLabel("Account name", {exact: true}).fill("General account");
   await wallet.getByRole("button", {name: "Create Pilot passkey", exact: true}).click();
   await expect(wallet.getByText(/General signing account: Pilot checks selected action templates/)).toBeVisible();
-  await expect(wallet.locator("#error")).toContainText("General account lock is not deployed");
+  await expect(wallet.locator("#error")).toContainText("fund the displayed passkey owner address first");
   await expect(wallet.getByRole("button", {name: "Approve session with passkey"})).toBeDisabled();
   expect(await frame.evaluate(() => Object.keys(localStorage).some(k => k.startsWith("pilot:wallet:account:")))).toBe(false);
 });
@@ -695,4 +699,25 @@ test("wallet sign-in does not send progress responses to an older SDK without op
   await expect(wallet.locator('#status')).toContainText('Passkey verified');
   await expect(page.locator('#error')).toHaveText('');
   expect(await page.evaluate(()=>(window as any).progressEvents)).toBe(0);
+});
+
+
+test("mixed-wallet permission displays guarded branches for review without selecting them automatically", async ({page,context}) => {
+  await page.route("https://testnet.ckb.dev/**", route => {
+    const r=route.request().postDataJSON();
+    return route.fulfill({json:{jsonrpc:"2.0",id:r.id,result:r.method === "get_cells" ? {last_cursor:"0x",objects:[]} : null}});
+  });
+  await page.goto("http://localhost:5177/tests/app.html?mixed=1");
+  await page.getByRole("button",{name:"Connect Pilot",exact:true}).click();
+  const wallet=await enterPilot(page);
+  const frame=page.frames().find(f=>f.url().startsWith("http://localhost:5176/"))!;
+  await authenticator(context,frame);
+  await wallet.getByLabel("Account name",{exact:true}).fill("Mixed recipients");
+  await wallet.getByRole("button",{name:"Create Pilot passkey",exact:true}).click();
+  const choice=wallet.getByRole("checkbox",{name:"Distribute rewards"});
+  await expect(choice).toBeVisible();await expect(choice).not.toBeChecked();
+  await wallet.getByText("View policy details",{exact:true}).click();
+  await expect(wallet.getByText(/payout: 2 allowed wallet-script and identity branches/)).toBeVisible();
+  await expect(wallet.locator(".policy pre")).toContainText('"outputLock"');
+  await expect(wallet.locator(".policy pre")).toContainText('"lockArgs"');
 });

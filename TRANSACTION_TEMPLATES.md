@@ -64,7 +64,7 @@ Each template has version `1`, a stable `id`, `maxSpend` in decimal shannons, `i
 
 - Every application effect must match exactly one role within the **same** selected template. Roles must be unique per input/output side. Missing required roles, ambiguous matches, unexpected cells or excess repetitions reject the template.
 - A role defaults to exactly one occurrence. Set `min`/`max` explicitly to permit optional or repeated cells, up to 64 occurrences. At most 32 input roles and 32 output roles are supported. A template must include an output rule.
-- The wallet manages its own authority and ordinary empty account funding/change cells; those are excluded from template roles. All other input cells and all other outputs must be described, including account-owned typed/data-bearing assets. Developers should not include wallet-generated authority, funding/change or sponsor cells in example effects.
+- The wallet manages its own authority and ordinary empty account funding/change cells; those are excluded from template roles by default. Set `includeAccountOutputs: true` to include plain self-payout outputs in application roles; the authority and ordinary account inputs remain excluded. All other input cells and all other outputs must be described, including account-owned typed/data-bearing assets. Developers should not include wallet-generated authority, funding/change or sponsor cells in example effects.
 - A script pattern is `'account'`, `'owner'`, or `{ codeHash, hashType, args }`. Explicit `args` constraints support exact `equals`, a byte `prefix`, exact byte `length`, and byte `fields`. Omitting a constraint leaves that property variable. A type pattern of `null` requires **no type script**; it is not a wildcard.
 - Data constraints support exact `length`, `minLength`, `maxLength`, `prefix`, and `fields`. Byte offsets and lengths count bytes, not hex characters. Fields match fixed hex bytes or `accountLockHash`, `ownerLockHash`, `accountLockArgs`, `ownerLockArgs`. To bind a prefix, use `{ account: 'accountLockArgs', offset: 0, length: 20 }` as the field’s `value`. Out-of-range references reject.
 - A cell’s optional `capacity.min`/`capacity.max` bounds the complete capacity of that cell, not the amount of a purchase. `maxSpend` bounds net CKB leaving the account for the entire action. The on-chain remaining allowance is also checked and debited; receipts/incoming funds do not automatically refill it.
@@ -105,13 +105,47 @@ forEach: [{
 }]
 ```
 
-Pairing follows occurrence order within each role, not absolute transaction indices or identity lookup. Counts must be equal. `index: 'each'` is valid only for the group's input/output roles; ordinary numeric indices and singleton references can supply shared context. Every relation must reference `each` on at least one side. Ordinary `relations` still require a numeric index for repeated roles. Lock equality compares the full lock hash. Choose data slices for the application's actual identity layout; the offsets above are illustrative, not a universal format.
+Pairing follows occurrence order within each role, not absolute transaction indices or identity lookup. Counts must be equal. `index: 'each'` is valid only for the group's input/output roles; ordinary numeric indices and singleton references can supply shared context. Every common or branch relation must reference `each` on at least one side. Ordinary `relations` still require a numeric index for repeated roles. Lock equality compares the full lock hash. Choose data slices for the application's actual identity layout; the offsets above are illustrative, not a universal format.
 
 All application effects still match exactly one role. Missing/extra counterparts, redirected recipients or identity changes fail the corresponding comparisons. If reordering changes a compared field, it also fails; the engine does not sort or search for a matching recipient. The rule does not independently enforce unique identity values: bind sufficient identity fields and rely on the app contract for any domain-specific uniqueness, reward arithmetic or winner-selection requirements. Role bounds apply before iteration; empty groups are allowed only when both roles explicitly permit zero entries.
 
-Limits: 32 groups, 64 comparisons per group and 4,096 worst-case expanded comparisons across all groups. The expansion bound uses each group's smaller input/output maximum. The existing 64 ordinary comparisons and 64 occurrences per role remain unchanged. Unknown properties and invalid iterator references fail closed. All repeated rules enter the canonical policy commitment.
+Limits: 32 groups, 64 common comparisons per group and 4,096 worst-case expanded comparisons across all groups (including guarded alternatives described below). The expansion bound uses each group's smaller input/output maximum. The existing 64 ordinary comparisons and 64 occurrences per role remain unchanged. Unknown properties and invalid iterator references fail closed. All repeated rules enter the canonical policy commitment.
 
-Redeploy the wallet with the updated matcher and install the updated SDK in integrating apps and receiving message verifiers. Older matchers reject the new schema. Changing from fixed-size templates changes permissions: users must explicitly review a replacement grant after pending receipts settle; existing grants are not silently broadened. The current single-session rule remains unchanged. FON now uses one **Distribute rewards** template for 1–64 raffle winners, preserving each entry's lock and identity and binding it to the campaign. Tests use real FON transaction builders with mocked chain data; live distribution remains to be verified after redeployment.
+Redeploy the wallet with the updated matcher and install the updated SDK in integrating apps and receiving message verifiers. Older matchers reject the new schema. Changing from fixed-size templates changes permissions: users must explicitly review a replacement grant after pending receipts settle; existing grants are not silently broadened. The current single-session rule remains unchanged. FON uses one **Distribute rewards** template for 1–64 raffle winners, binding each ticket to its campaign and its corresponding plain wallet payout using the guarded alternatives below. Tests use real FON transaction builders with mocked chain data; live distribution remains to be verified after redeployment.
+
+## Mixed wallet payouts and guarded identity alternatives
+
+A script pattern can be `{ anyOf: [scriptA, scriptB, ...] }`. Each cell chooses independently, so one repeated payout role can accept different approved wallet programs in the same batch. Choices are flat, nonempty and limited to eight; every explicit script pins its `codeHash` and `hashType` and may constrain arguments. `account`/`owner` exact-script matches are also allowed as choices. Nested alternatives and unknown properties reject. A type pattern of `null` still strictly requires no type script, and `data: { length: 0 }` requires empty payout data.
+
+For payouts into the same account that signs the batch, set the top-level template flag `includeAccountOutputs: true`. This includes all plain outputs to that account in app-role matching, in their original order; the authority successor is still excluded. Without the flag, the earlier behavior of treating plain self-outputs as wallet-managed returns remains. FON enables the flag so a batch can pay both the signing account and other wallets. Include every intended plain self-output in the roles; extra such outputs then fail matching rather than disappearing as change. The flag is validated, hash-committed and displayed in policy details. Ordinary account inputs stay wallet-managed.
+
+Each `forEach` group may additionally declare `anyOf` identity branches. A branch contains an `outputLock` guard (one script match, not another alternatives object) and a nonempty list of `relations`. For each pair, **one complete branch must match**: the paired output's lock must satisfy the guard and all branch relations must pass. Every common `relations` check must also pass. Branches cannot borrow the script guard or identity comparison from a different branch.
+
+```ts
+// Replace these placeholders with the actual reviewed wallet programs.
+const ordinary = { codeHash: ORDINARY_WALLET_CODE_HASH, hashType: 'type', args: {} };
+const pilotOwner = { codeHash: PILOT_PASSKEY_CODE_HASH, hashType: 'data2', args: {} };
+// Payout output role: { role: 'payout', min: 1, max: 64,
+//   lock: { anyOf: [ordinary, pilotOwner] }, type: null, data: { length: 0 } }
+forEach: [{
+  inputRole: 'ticket', outputRole: 'payout',
+  relations: [/* common campaign/entry checks */],
+  anyOf: [
+    { outputLock: ordinary, relations: [{
+      left: { source: 'input', role: 'ticket', index: 'each', field: 'data', offset: 29, length: 20 },
+      right: { source: 'output', role: 'payout', index: 'each', field: 'lockArgs', offset: 0, length: 20 },
+    }] },
+    { outputLock: pilotOwner, relations: [{
+      left: { source: 'input', role: 'ticket', index: 'each', field: 'data', offset: 29, length: 20 },
+      right: { source: 'output', role: 'payout', index: 'each', field: 'lock', offset: 0, length: 20 },
+    }] },
+  ],
+}]
+```
+
+`field: 'lock'` means the script hash, not its serialized arguments. FON uses ordinary argument-prefix branches for JoyID, secp256k1, OmniLock and other Pilot general accounts, and a script-hash-prefix branch for Pilot passkey-owner payouts. Its template consumes tickets and authorizes actual plain wallet outputs; it does not recreate or preserve ticket locks. Input/output counts and pairing still apply. FON's updated contract remains responsible for winner selection, ticket-capacity return, reward amounts and escrow reduction; deployment of that app contract is a separate prerequisite. Pilot does not infer those arithmetic checks from identity matching.
+
+Each group permits at most eight branches and 64 comparisons per branch. The 4,096 expanded-comparison budget counts the common comparisons **plus all branch comparisons and one script guard per branch**, multiplied by the group's smaller role maximum. All script choices, branch guards and comparisons enter canonical policy hashes. The permission details show the branch count and full committed rules. Older wallets/verifiers reject these additions; update the SDK in apps and proof-verifying backends and redeploy the hosted wallet. No new Pilot contract is needed. Changed permissions require explicit owner-approved replacement after pending receipts settle; existing grants never broaden automatically. These checks remain wallet-enforced, with the same stolen-key boundary.
 
 ## Starting from an example
 

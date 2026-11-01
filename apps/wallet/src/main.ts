@@ -616,6 +616,12 @@ function renderPolicyChoices() {
     const technical = node("details", undefined, policy);
     if (p.direction === "template") node("small", `Up to ${ccc.fixedPointToString(BigInt(p.template!.maxSpend))} CKB net spending per action · wallet-enforced`, policy);
     node("summary", "View policy details", technical);
+    if (p.direction === "template") {
+      if (p.template!.includeAccountOutputs) node("p", "Plain payouts to this signing account are included in the application output checks. The authority successor stays wallet-managed.", technical);
+      for (const group of p.template!.forEach ?? []) {
+        if (group.anyOf) node("p", `${group.outputRole}: ${group.anyOf.length} allowed wallet-script and identity branches. Each paired payout must satisfy one complete branch plus every common check.`, technical);
+      }
+    }
     node("pre", JSON.stringify(p, null, 2), technical);
   });
   renderModal();

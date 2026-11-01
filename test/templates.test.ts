@@ -137,3 +137,62 @@ test('repeated schema rejects invalid iterators, unknown rules and excessive exp
   huge.forEach=[group,{inputRole:'other',outputRole:'other',relations:[{left:{source:'input',role:'other',index:'each',field:'lock'},right:{source:'output',role:'other',index:'each',field:'lock'}}]}];
   assert.throws(()=>validatePilotTransactionTemplate(huge),/Invalid transaction template/);
 });
+
+function mixedPayoutFixture(count = 5) {
+  const programs = Array.from({length: 5}, (_, i) => ({codeHash: h(10 + i), hashType: 'data2' as const, args: {}}));
+  const t: PilotTransactionTemplate = {version: 1, id: 'mixed-payouts', maxSpend: '0',
+    inputs: [{role: 'ticket', min: 1, max: 64, lock: {codeHash: h(9), hashType: 'data2', args: {}}, type: null, data: {length: 20}}],
+    outputs: [{role: 'payout', min: 1, max: 64, lock: {anyOf: programs}, type: null, data: {length: 0}}],
+    forEach: [{inputRole: 'ticket', outputRole: 'payout', relations: [], anyOf: programs.map((outputLock, i) => ({outputLock, relations: [{
+      left: {source: 'input', role: 'ticket', index: 'each', field: 'data', offset: 0, length: 20},
+      right: {source: 'output', role: 'payout', index: 'each', field: i === 4 ? 'lock' : 'lockArgs', offset: 0, length: 20},
+    }]}))}],
+  };
+  const tx=ccc.Transaction.default();
+  const e: Parameters<typeof matchesPilotTransactionTemplate>[1] = {inputs: [], outputs: [], spent: 0n, tx};
+  for(let i=0;i<count;i++) {
+    const n=i%5, lock=script(10+n,ccc.hexFrom(new Uint8Array(n===4?97:22).fill(i+1)));
+    e.inputs.push({output:ccc.CellOutput.from({lock:script(9),capacity:ccc.fixedPointFrom(205)}),data:ccc.hexFrom(ccc.bytesFrom(n===4?lock.hash():lock.args).slice(0,20)),index:i});
+    e.outputs.push({output:ccc.CellOutput.from({lock,capacity:ccc.fixedPointFrom(300)}),data:'0x',index:i});
+  }
+  return {t,e,match:()=>matchesPilotTransactionTemplate(t,e,account,owner)};
+}
+test('one template permits different script alternatives and guarded identities within the same repeated batch',()=>{
+  for(const count of [1,5,9,32,64]) assert.equal(mixedPayoutFixture(count).match(),true);
+  assert.equal(mixedPayoutFixture(65).match(),false);
+});
+test('guarded alternatives cannot borrow another script identity rule or ignore common comparisons',()=>{
+  const cases=[
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.inputs[0]!.data=ccc.hexFrom(ccc.bytesFrom(f.e.outputs[0]!.output.lock.hash()).slice(0,20));},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.inputs[4]!.data=ccc.hexFrom(ccc.bytesFrom(f.e.outputs[4]!.output.lock.args).slice(0,20));},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs[4]!.output.lock.args='0x01';},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs[0]!.output.lock.codeHash=h(99);},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs[0]!.output.lock.hashType='type';},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs[0]!.output.type=script(99);},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs[0]!.data='0x01';},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs.pop();},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs.push({...f.e.outputs[0]!});},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.e.outputs[4]={...f.e.outputs[0]!};},
+    (f:ReturnType<typeof mixedPayoutFixture>)=>{f.t.forEach![0]!.relations=[{left:{source:'input',role:'ticket',index:'each',field:'capacity'},right:{source:'output',role:'payout',index:'each',field:'capacity'}}];},
+  ];
+  for(const mutate of cases){const f=mixedPayoutFixture();mutate(f);assert.equal(f.match(),false);}
+});
+test('script choices and identity branches are flat, bounded, strict and included in policy commitments',()=>{
+  const original=mixedPayoutFixture().t;
+  const bad=(mutate:(t:PilotTransactionTemplate)=>void)=>{const t=structuredClone(original);mutate(t);assert.throws(()=>validatePilotTransactionTemplate(t),/Invalid transaction template/);};
+  bad(t=>{t.outputs[0]!.lock={anyOf:[]};});
+  bad(t=>{t.outputs[0]!.lock={anyOf:Array.from({length:9},()=>({codeHash:h(10),hashType:"data2" as const,args:{}}))};});
+  bad(t=>{t.outputs[0]!.lock={anyOf:[{anyOf:["owner"]} as never]};});
+  bad(t=>{t.forEach![0]!.anyOf=[];});
+  bad(t=>{t.forEach![0]!.anyOf=Array.from({length:9},()=>t.forEach![0]!.anyOf![0]!);});
+  bad(t=>{t.forEach![0]!.anyOf![0]!.relations=[];});
+  bad(t=>{t.forEach![0]!.anyOf![0]!.outputLock={anyOf:["owner"]} as never;});
+  bad(t=>{t.forEach![0]!.anyOf![0]!.relations[0]!.left.role='missing';});
+  bad(t=>{(t.forEach![0]!.anyOf![0] as unknown as Record<string,unknown>).allowAny=true;});
+  bad(t=>{t.forEach![0]!.anyOf=Array.from({length:8},()=>({...t.forEach![0]!.anyOf![0]!,relations:Array.from({length:8},()=>t.forEach![0]!.anyOf![0]!.relations[0]!)}));});
+  bad(t=>{t.includeAccountOutputs='yes' as never;});
+  const a=structuredClone(original);(a.outputs[0]!.lock as unknown as {anyOf: {codeHash:ccc.Hex}[]}).anyOf[0]!.codeHash=h(50);
+  const b=structuredClone(original);b.forEach![0]!.anyOf![0]!.relations[0]!.right.field='lock';
+  const c=structuredClone(original);c.forEach![0]!.anyOf![0]!.outputLock='owner';
+  for(const changed of [a,b,c,{...original,includeAccountOutputs:true}])assert.notEqual(pilotTemplateHash(original),pilotTemplateHash(changed));
+});

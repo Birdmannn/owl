@@ -5,11 +5,13 @@ export interface PilotTemplateByteRule {
   offset: number;
   value: ccc.Hex | PilotAccountBytes | { account: PilotAccountBytes; offset: number; length: number };
 }
-export type PilotScriptPattern = "account" | "owner" | {
+export type PilotScriptMatch = "account" | "owner" | {
   codeHash: ccc.Hex;
   hashType: ccc.HashType;
   args: { equals?: ccc.Hex; prefix?: ccc.Hex; length?: number; fields?: readonly PilotTemplateByteRule[] };
 };
+/** Flat, bounded alternatives; each cell may choose a different matching script. */
+export type PilotScriptPattern = PilotScriptMatch | { anyOf: readonly PilotScriptMatch[] };
 export interface PilotTemplateCell {
   role: string;
   min?: number;
@@ -36,17 +38,27 @@ export interface PilotTemplateField {
 }
 /** `each` resolves to the current occurrence of the declared input/output role. */
 export type PilotTemplateRepeatedField = Omit<PilotTemplateField, "index"> & { index?: number | "each" };
+export type PilotTemplateRepeatedRelation = { left: PilotTemplateRepeatedField; right: PilotTemplateRepeatedField };
+export interface PilotTemplateIdentityBranch {
+  /** Guard applies to the paired output lock, AND all relations in this branch. */
+  outputLock: PilotScriptMatch;
+  relations: readonly PilotTemplateRepeatedRelation[];
+}
 export interface PilotTemplateForEach {
   inputRole: string;
   outputRole: string;
   /** Roles pair by occurrence order, with equal counts; all comparisons run for every pair. */
-  relations: readonly { left: PilotTemplateRepeatedField; right: PilotTemplateRepeatedField }[];
+  relations: readonly PilotTemplateRepeatedRelation[];
+  /** At least one whole guarded branch must match per pair, in addition to common relations. */
+  anyOf?: readonly PilotTemplateIdentityBranch[];
 }
 export interface PilotTransactionTemplate {
   version: 1;
   id: string;
   /** Net CKB leaving the account; cumulative allowance is enforced separately. */
   maxSpend: string;
+  /** Count plain self-payments as application outputs; authority remains wallet-managed. */
+  includeAccountOutputs?: boolean;
   inputs: readonly PilotTemplateCell[];
   outputs: readonly PilotTemplateCell[];
   relations?: readonly { left: PilotTemplateField; right: PilotTemplateField }[];
@@ -81,7 +93,7 @@ function byteRules(rules: readonly PilotTemplateByteRule[] | undefined) {
     } else requireRule(hex(f.value) || accountBytes.includes(f.value));
   }
 }
-function scriptRule(p: PilotScriptPattern) {
+function scriptMatchRule(p: PilotScriptMatch) {
   if (p === "account" || p === "owner") return;
   requireRule(p && typeof p === "object" && hex(p.codeHash) && p.codeHash.length === 66 &&
     ["data", "type", "data1", "data2"].includes(p.hashType) && p.args && typeof p.args === "object");
@@ -92,6 +104,13 @@ function scriptRule(p: PilotScriptPattern) {
   requireRule(p.args.length === undefined || uint(p.args.length));
   byteRules(p.args.fields);
 }
+function scriptRule(p: PilotScriptPattern) {
+  if (p && typeof p === "object" && "anyOf" in p) {
+    keys(p, ["anyOf"]);
+    requireRule(Array.isArray(p.anyOf) && p.anyOf.length > 0 && p.anyOf.length <= 8);
+    for (const option of p.anyOf) scriptMatchRule(option);
+  } else scriptMatchRule(p);
+}
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.entries(value).filter(([, v]) => v !== undefined)
@@ -99,8 +118,9 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 export function validatePilotTransactionTemplate(t: PilotTransactionTemplate): void {
-  keys(t, ["version", "id", "maxSpend", "inputs", "outputs", "relations", "forEach", "witnesses"]);
+  keys(t, ["version", "id", "maxSpend", "includeAccountOutputs", "inputs", "outputs", "relations", "forEach", "witnesses"]);
   requireRule(t && t.version === 1 && typeof t.id === "string" && /^[a-zA-Z0-9_.:-]{1,100}$/.test(t.id) && amount(t.maxSpend));
+  requireRule(t.includeAccountOutputs === undefined || typeof t.includeAccountOutputs === "boolean");
   requireRule(Array.isArray(t.inputs) && Array.isArray(t.outputs) && t.inputs.length <= 32 && t.outputs.length > 0 && t.outputs.length <= 32);
   for (const rules of [t.inputs, t.outputs]) {
     const roles = new Set<string>();
@@ -145,14 +165,24 @@ export function validatePilotTransactionTemplate(t: PilotTransactionTemplate): v
   let repeatedComparisons = 0;
   const pairs = new Set<string>();
   for (const group of t.forEach ?? []) {
-    keys(group, ["inputRole", "outputRole", "relations"]);
+    keys(group, ["inputRole", "outputRole", "relations", "anyOf"]);
     const input = t.inputs.find(r => r.role === group.inputRole), output = t.outputs.find(r => r.role === group.outputRole);
     requireRule(input && output && !pairs.has(`${group.inputRole}:${group.outputRole}`));
     pairs.add(`${group.inputRole}:${group.outputRole}`);
-    requireRule(Array.isArray(group.relations) && group.relations.length > 0 && group.relations.length <= 64);
-    // Bound expanded work independently of the number of roles/groups.
-    repeatedComparisons += Math.min(input.max ?? 1, output.max ?? 1) * group.relations.length;
+    requireRule(Array.isArray(group.relations) && group.relations.length <= 64);
+    requireRule(group.anyOf === undefined || (Array.isArray(group.anyOf) && group.anyOf.length > 0 && group.anyOf.length <= 8));
+    requireRule(group.relations.length > 0 || group.anyOf !== undefined);
+    let comparisons = group.relations.length;
     for (const relation of group.relations) validateRelation(relation, group);
+    for (const branch of group.anyOf ?? []) {
+      keys(branch, ["outputLock", "relations"]);
+      scriptMatchRule(branch.outputLock);
+      requireRule(Array.isArray(branch.relations) && branch.relations.length > 0 && branch.relations.length <= 64);
+      for (const relation of branch.relations) validateRelation(relation, group);
+      // Include every branch and guard in worst-case work, even if matching short-circuits.
+      comparisons += 1 + branch.relations.length;
+    }
+    repeatedComparisons += Math.min(input.max ?? 1, output.max ?? 1) * comparisons;
   }
   requireRule(repeatedComparisons <= 4096);
   requireRule(t.witnesses === undefined || (Array.isArray(t.witnesses) && t.witnesses.length <= 64));
@@ -191,7 +221,7 @@ export function matchesPilotTransactionTemplate(
     } else value = hex(f.value) ? f.value : references[f.value];
     return data.slice(2 + f.offset * 2, 2 + f.offset * 2 + value.length - 2) === value.slice(2);
   });
-  const script = (pattern: PilotScriptPattern, actual: ccc.Script | undefined): boolean => {
+  const scriptMatch = (pattern: PilotScriptMatch, actual: ccc.Script | undefined): boolean => {
     if (!actual) return false;
     if (pattern === "account") return actual.eq(account);
     if (pattern === "owner") return actual.eq(owner);
@@ -200,6 +230,8 @@ export function matchesPilotTransactionTemplate(
       (pattern.args.prefix === undefined || actual.args.startsWith(pattern.args.prefix)) &&
       (pattern.args.length === undefined || ccc.bytesFrom(actual.args).length === pattern.args.length) && fieldsMatch(actual.args, pattern.args.fields);
   };
+  const script = (pattern: PilotScriptPattern, actual: ccc.Script | undefined): boolean =>
+    typeof pattern === "object" && "anyOf" in pattern ? pattern.anyOf.some(option => scriptMatch(option, actual)) : scriptMatch(pattern, actual);
   const cell = (r: PilotTemplateCell, e: PilotTemplateEffect): boolean => {
     const size = ccc.bytesFrom(e.data).length;
     return script(r.lock, e.output.lock) && (r.type === null ? !e.output.type : script(r.type, e.output.type)) &&
@@ -247,10 +279,12 @@ export function matchesPilotTransactionTemplate(
     if (inputs.length !== outputs.length) return false;
     for (let index = 0; index < inputs.length; index++) {
       const resolve = (f: PilotTemplateRepeatedField): PilotTemplateField => ({ ...f, index: f.index === "each" ? index : f.index });
-      for (const relation of group.relations) {
+      const compare = (relation: PilotTemplateRepeatedRelation) => {
         const left = field(resolve(relation.left)), right = field(resolve(relation.right));
-        if (left === undefined || right === undefined || left !== right) return false;
-      }
+        return left !== undefined && right !== undefined && left === right;
+      };
+      if (!group.relations.every(compare)) return false;
+      if (group.anyOf && !group.anyOf.some(branch => scriptMatch(branch.outputLock, outputs[index]!.output.lock) && branch.relations.every(compare))) return false;
     }
   }
   for (const w of t.witnesses ?? []) {

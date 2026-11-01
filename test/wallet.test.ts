@@ -324,6 +324,7 @@ async function fixture(t: TestContext, initial = true, general = false) {
     options,
     session,
     cells,
+    addCell(cell: ccc.Cell) { cells.push(cell); all.push(cell); },
     receipts,
     submitted,
     get journal() {
@@ -941,7 +942,7 @@ test("general wallet signs repeated dynamic instances using committed software t
     lock: f.recipient, type: {codeHash: contract, hashType: "data2", args}, capacity: ccc.fixedPointFrom(200),
   }], outputsData: [f.session.lock.hash()]});
   const example = await pilotTemplateFromExample(f.client, output('0x01'), {id: 'publish', maxSpend: ccc.fixedPointFrom(200).toString()});
-  assert.equal(example.outputs[0]!.type && typeof example.outputs[0]!.type === 'object' && example.outputs[0]!.type.args.equals, '0x01');
+  assert.equal(example.outputs[0]!.type && typeof example.outputs[0]!.type === 'object' && 'args' in example.outputs[0]!.type && example.outputs[0]!.type.args.equals, '0x01');
   // Explicitly permit future instances, while pinning contract, recipient and beneficiary.
   const template = structuredClone(example);
   template.outputs[0]!.type = {codeHash: contract, hashType: 'data2', args: {length: 1}};
@@ -998,4 +999,38 @@ test("general account reconciles uncertain signatures before keyless owner recov
   assert.equal(recovered.getWitnessArgs(0)?.lock, before.getWitnessArgs(0)?.lock);
   assert.equal(f.journal.receipts.find(r => r.id === 'general-lost')!.status, 'confirmed');
   assert.equal(f.journal.receipts.at(-1)!.kind, 'recover');
+});
+
+test('selected mixed-wallet payout permission signs batches without another owner prompt and rejects wrong identity branches', async t => {
+  const f=await fixture(t,false,true);
+  const programs=Array.from({length:4},(_,i)=>({codeHash:h(70+i),hashType:'data2' as const,args:{}}));
+  const policy=pilotTemplatePolicy('Distribute rewards',{version:1,id:'mixed.rewards',maxSpend:'0',includeAccountOutputs:true,
+    inputs:[{role:'ticket',min:1,max:64,lock:{codeHash:h(69),hashType:'data2',args:{}},type:null,data:{length:20}}],
+    outputs:[{role:'payout',min:1,max:64,lock:{anyOf:[...programs,'owner','account']},type:null,data:{length:0}}],
+    forEach:[{inputRole:'ticket',outputRole:'payout',relations:[],anyOf:[...programs,'owner' as const,'account' as const].map(outputLock=>({outputLock,relations:[{
+      left:{source:'input' as const,role:'ticket',index:'each' as const,field:'data' as const,offset:0,length:20},
+      right:{source:'output' as const,role:'payout',index:'each' as const,field:outputLock==='owner'?'lock' as const:'lockArgs' as const,offset:0,length:20},
+    }]}))}],
+  });
+  await f.session.grant({...f.state,policies:[policy]},ccc.fixedPointFrom(1200));
+  const signs=f.signs;let reviews=0;f.options.approveOnce=async()=>{reviews++;return false;};
+  let nonce=0;
+  function batch(count:number){
+    const tx=ccc.Transaction.default();
+    for(let i=0;i<count;i++){
+      const recipient=i%6===4?ccc.Script.from(f.account.ownerLock):i%6===5?f.session.lock:ccc.Script.from({...programs[i%4]!,args:ccc.hexFrom(new Uint8Array(22).fill(i+1))});
+      const cell=ccc.Cell.from({outPoint:{txHash:h(100+(nonce++)),index:0},cellOutput:{lock:{codeHash:h(69),hashType:'data2',args:'0x'},capacity:ccc.fixedPointFrom(205)},outputData:ccc.hexFrom(ccc.bytesFrom(i%6===4?recipient.hash():recipient.args).slice(0,20))});
+      f.addCell(cell);tx.addInput({previousOutput:cell.outPoint});tx.addOutput({lock:recipient,capacity:ccc.fixedPointFrom(205)},'0x');
+    }
+    return tx;
+  }
+  for(const count of [6,10]){
+    const tx=await f.session.prepareAppTransaction(batch(count));const id=`mixed-${count}`;
+    const hash=await f.session.sendTransaction(tx,id);assert.equal(await f.session.sendTransaction(tx,id),hash);
+  }
+  assert.equal(f.signs,signs);assert.equal(reviews,0);assert.equal(f.journal.receipts.at(-1)!.policyName,'Distribute rewards');
+  f.options.approveOnce=undefined;
+  const wrong=batch(5);wrong.outputs[4]!.lock=wrong.outputs[4]!.lock.clone();wrong.outputs[4]!.lock.args=ccc.hexFrom(new Uint8Array(97).fill(9));
+  await assert.rejects(f.session.prepareAppTransaction(wrong),/approved action template/);
+  assert.equal(f.signs,signs);assert.equal(reviews,0);
 });

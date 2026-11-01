@@ -267,6 +267,7 @@ export async function validatePilotWalletEffects(
   const templates = state.policies.filter(p => p.direction === "template");
   const useTemplates = general && templates.length > 0;
   const effects: { inputs: PilotTemplateEffect[]; outputs: PilotTemplateEffect[] } = { inputs: [], outputs: [] };
+  const accountOutputs: PilotTemplateEffect[] = [];
   let input = 0n,
     output = 0n,
     anchorIn = -1,
@@ -329,7 +330,10 @@ export async function validatePilotWalletEffects(
     if (o.lock.eq(lock)) {
       output += o.capacity;
       if (o.type?.eq(type)) continue;
-      if (!o.type && data === "0x") continue;
+      if (!o.type && data === "0x") {
+        accountOutputs.push({ output: o, data, index: i });
+        continue;
+      }
     }
     effects.outputs.push({ output: o, data, index: i });
     if (!ownerApproved && !useTemplates && !permitted(state, o, data, "output"))
@@ -342,7 +346,9 @@ export async function validatePilotWalletEffects(
   const spent = input > output ? input - output : 0n;
   if (spent > BigInt(state.remaining))
     throw new Error("Session spending budget exceeded");
-  const matched = !ownerApproved && useTemplates ? templates.find(p => matchesPilotTransactionTemplate(p.template!, { ...effects, spent, tx }, lock, ccc.Script.from(account.ownerLock))) : undefined;
+  const matched = !ownerApproved && useTemplates ? templates.find(p => matchesPilotTransactionTemplate(p.template!, {
+    ...effects, outputs: p.template!.includeAccountOutputs ? [...effects.outputs, ...accountOutputs].sort((a,b) => a.index - b.index) : effects.outputs, spent, tx,
+  }, lock, ccc.Script.from(account.ownerLock))) : undefined;
   if (!ownerApproved && useTemplates && !matched) throw new PilotPolicyApprovalRequiredError("Transaction does not match an approved action template");
   const next = {
     ...state,
