@@ -721,3 +721,78 @@ test("mixed-wallet permission displays guarded branches for review without selec
   await expect(wallet.locator(".policy pre")).toContainText('"outputLock"');
   await expect(wallet.locator(".policy pre")).toContainText('"lockArgs"');
 });
+
+test('connected profile edits permissions and budget without reconnecting; cancel and outer close discard drafts', async ({page, context}) => {
+  // UI fixture only. Core wallet tests separately exercise real transaction building,
+  // owner signatures, settlement and cancellation against the mocked chain.
+  await page.route('**/src/main.ts', async route => {
+    const response = await route.fetch();
+    let body = await response.text();
+    body = body.replace(/const ready =[^;]+;/, 'const ready = true;');
+    body += `
+      window.connectEditorFixture = () => {
+        const approval = pendingConnect;
+        connectedRequest = structuredClone(approval.request);
+        let journal = {stopped:false, receipts:[], state:{publicKey:'fixture-key', appOrigin, policies:[connectedRequest.policies[0]], remaining:'500000000'}};
+        session = {
+          publicKey:'fixture-key', options:{journal:{load:async()=>structuredClone(journal)}},
+          resume:async()=>{},
+          updateSession:async update=>{window.editUpdates=(window.editUpdates||[]).concat([structuredClone(update)]); journal.state={...journal.state,...{policies:update.policies,remaining:update.budget}};},
+        };
+        connection={address:'session-address',ownerAddress:'owner-address',account:{},appOrigin,expiresAt:Date.now()+60000};
+        pendingConnect=undefined;
+        goTo('profile');
+        reply(approval.envelope,connection);
+      };
+    `;
+    await route.fulfill({response, body});
+  });
+  await page.goto('http://localhost:5177/tests/app.html?catalog=2');
+  await page.getByRole('button', {name:'Connect Pilot', exact:true}).click();
+  const wallet = await enterPilot(page);
+  const frame = page.frames().find(f => f.url().startsWith('http://localhost:5176/'))!;
+  await authenticator(context, frame);
+  await wallet.getByLabel('Account name', {exact:true}).fill('Editor Alice');
+  await wallet.getByRole('button', {name:'Create Pilot passkey', exact:true}).click();
+  await expect(wallet.getByRole('heading', {name:'Sign these on my behalf', exact:true})).toBeVisible();
+  await frame.evaluate(() => (window as any).connectEditorFixture());
+  await expect(page.getByText('Connected', {exact:true})).toBeVisible();
+  await page.evaluate(() => (window as any).pilotTestProvider.open());
+  await wallet.getByRole('button', {name:'Review permissions', exact:true}).click();
+  await expect(wallet.getByRole('heading', {name:'Update permissions and budget', exact:true})).toBeVisible();
+  await expect(wallet.getByRole('checkbox', {name:'Action 0', exact:true})).toBeChecked();
+  await expect(wallet.getByLabel('Maximum session spending (CKB)')).toHaveValue('5');
+  const pausedError = await page.evaluate(async () => {
+    try { await (window as any).pilotTestProvider.request('signMessage', {scope:'social.like', message:'post:1', nonce:'paused_review_nonce_1234'}); }
+    catch (error) { return String(error); }
+  });
+  expect(pausedError).toContain('Session changes are being reviewed');
+  await wallet.getByRole('checkbox', {name:'Action 1', exact:true}).check();
+  await wallet.getByRole('button', {name:'Cancel changes', exact:true}).click();
+  await wallet.getByRole('button', {name:'Review permissions', exact:true}).click();
+  await expect(wallet.getByRole('checkbox', {name:'Action 1', exact:true})).not.toBeChecked();
+  await wallet.getByRole('checkbox', {name:'Action 1', exact:true}).check();
+  await page.evaluate(() => (window as any).pilotTestProvider.hide());
+  await page.evaluate(() => (window as any).pilotTestProvider.open());
+  await wallet.getByRole('button', {name:'Review permissions', exact:true}).click();
+  await expect(wallet.getByRole('checkbox', {name:'Action 1', exact:true})).not.toBeChecked();
+  await wallet.getByLabel('Maximum session spending (CKB)').fill('11');
+  await wallet.getByRole('button', {name:'Save changes with passkey', exact:true}).click();
+  await expect(wallet.locator('#error')).toContainText('within the app request');
+  await wallet.getByLabel('Maximum session spending (CKB)').fill('7');
+  await wallet.getByRole('checkbox', {name:'Action 1', exact:true}).check();
+  await wallet.getByRole('button', {name:'Save changes with passkey', exact:true}).click();
+  await wallet.getByRole('button', {name:'Cancel', exact:true}).click();
+  expect(await frame.evaluate(() => (window as any).editUpdates ?? [])).toEqual([]);
+  await wallet.getByRole('button', {name:'Save changes with passkey', exact:true}).click();
+  await wallet.getByRole('button', {name:'Confirm with passkey', exact:true}).click();
+  await expect(wallet.locator('#status')).toContainText('updated on-chain');
+  const updates = await frame.evaluate(() => (window as any).editUpdates);
+  expect(updates).toHaveLength(1);
+  expect(updates[0].policies).toHaveLength(2);
+  expect(updates[0].budget).toBe('700000000');
+  await wallet.getByRole('button', {name:'Review permissions', exact:true}).click();
+  await expect(wallet.getByRole('checkbox', {name:'Action 1', exact:true})).toBeChecked();
+  await expect(wallet.getByLabel('Maximum session spending (CKB)')).toHaveValue('7');
+  expect(await page.evaluate(() => (window as any).pilotTestProvider.connected)).toBe(true);
+});

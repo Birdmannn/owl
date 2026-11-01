@@ -216,6 +216,15 @@ let authenticated = false;
 let session: PilotWalletSession | undefined;
 let connection: PilotWalletConnection | undefined;
 let busy = false;
+let connectedRequest: (PilotWalletConnect & { dynamicPolicies?: boolean }) | undefined;
+let editingSession = false;
+let editDismissed = false;
+function discardSessionEdit() {
+  editingSession = false;
+  editDismissed = true;
+  cancelOwnerReview?.();
+  goTo("profile");
+}
 let pendingConnect:
   { request: PilotWalletConnect & { dynamicPolicies?: boolean }; envelope: PilotWalletEnvelope } | undefined;
 let policySelection: { id: string; requestId: string; accept: (value: unknown) => void } | undefined;
@@ -229,7 +238,7 @@ modalHeading.className = "modal-heading";
 modalHeading.tabIndex = -1;
 const modalBack = node("button", "← Back");
 modalBack.className = "modal-back";
-modalBack.onclick = () => goTo(modalStep === "signin" ? "welcome" : modalStep === "permissions" && !connection && pendingConnect?.request.dynamicPolicies ? "signin" : "profile");
+modalBack.onclick = () => editingSession ? discardSessionEdit() : goTo(modalStep === "signin" ? "welcome" : modalStep === "permissions" && !connection && pendingConnect?.request.dynamicPolicies ? "signin" : "profile");
 const workspace = node("div");
 workspace.className = "workspace";
 const welcome = node("section", undefined, workspace);
@@ -274,6 +283,8 @@ select.onchange = () => {
   continueSession.hidden = true;
   session = undefined;
   connection = undefined;
+  connectedRequest = undefined;
+  editingSession = false;
   showOwner();
   void renderLogs();
 };
@@ -348,6 +359,7 @@ async function run(fn: () => Promise<void>) {
   } finally {
     if (pendingConnect) notifyProgress("waiting-for-user");
     busy = false;
+    if (editingSession && editDismissed) discardSessionEdit();
     for (const b of root.querySelectorAll<
       HTMLButtonElement | HTMLInputElement | HTMLSelectElement
     >("button,input,select"))
@@ -535,6 +547,7 @@ const continueSession = button("Continue existing session", async () => {
     address: await session.getRecommendedAddress(), ownerAddress: await saved.owner.getRecommendedAddress(),
     account: session.options.account, appOrigin, expiresAt: saved.expiresAt,
   };
+  connectedRequest = structuredClone(approval.request);
   pendingConnect = undefined;
   resumable = undefined;
   status.textContent = "Existing session resumed. Its remaining budget, permissions and expiry are unchanged.";
@@ -596,7 +609,7 @@ async function prepareAccount(passkey: PilotPasskey): Promise<PilotWalletDescrip
 function renderPolicyChoices() {
   selectedPolicies = [];
   policyList.replaceChildren();
-  const v = pendingConnect?.request;
+  const v = pendingConnect?.request ?? (editingSession ? connectedRequest : undefined);
   if (!v) return;
   v.policies.forEach((p, i) => {
     const policy = node("div", undefined, policyList);
@@ -693,6 +706,7 @@ const loadAccountPolicies = button("Load account permissions", async () => {
 const grant = button(
   "Approve session with passkey",
   async () => {
+    if (editingSession) { await saveSessionChanges(); return; }
     if (!ready)
       throw new Error(
         "Deploy both wallet locks and configure sponsorship first",
@@ -785,6 +799,7 @@ const grant = button(
           "pilot:wallet:active:" + pilotWalletLock(account).hash(),
           JSON.stringify({ expiresAt, appOrigin }),
         );
+        connectedRequest = structuredClone(approval.request);
         pendingConnect = undefined;
         showOwner();
         status.textContent =
@@ -805,6 +820,26 @@ const grant = button(
 );
 grant.className = "primary";
 grant.disabled = true;
+const editNote = node("p", "This replaces your remaining spending allowance; it does not deposit funds. Your account, session key and expiry stay the same. Sponsored network fees are excluded. App actions pause while you review.", review);
+editNote.className = "fine";
+const cancelEdit = button("Cancel changes", async () => discardSessionEdit(), review);
+async function saveSessionChanges() {
+  const current = session, request = connectedRequest, account = selected;
+  if (!current || !request || !account || !authenticated || !connection) throw new Error("Connect this app first");
+  const policies = selectedPolicies.map(i => request.policies[i]!);
+  validatePilotPolicies(policies);
+  if (!/^\d+(\.\d{1,8})?$/.test(budget.value)) throw new Error("Enter a CKB amount with up to 8 decimals");
+  const amount = ccc.fixedPointFrom(budget.value);
+  if (amount <= 0n || amount > BigInt(request.budget)) throw new Error("Budget must be positive and within the app request");
+  if (!await confirmReview(`${appOrigin}\nReplace permissions with ${policies.length} selected actions and ${ccc.fixedPointToString(amount)} CKB remaining spending allowance?\nNo funds are deposited. Account and expiry stay unchanged. Sponsored network fees are excluded.`)) return;
+  await navigator.locks.request(accountKey(account) + ":owner-operation", async () => {
+    await current.updateSession({ policies, budget: amount.toString() });
+  });
+  editingSession = false;
+  status.textContent = "Permissions and spending allowance updated on-chain. Pilot stays connected.";
+  goTo("profile");
+  await renderLogs();
+}
 const profile = node("section", undefined, workspace);
 profile.className = "profile-card";
 const profileSummary = node("div", undefined, profile);
@@ -844,7 +879,24 @@ async function copyProfileAddress(address: HTMLElement) {
 }
 const profileBalance = node("p", "Refresh to see your balance.", profileSummary);
 button("Refresh balance", refreshAvailableBalances, profileSummary);
-button("Review permissions", async () => goTo("permissions"), profile).className = "primary full";
+button("Review permissions", async () => {
+  if (pendingConnect) { goTo("permissions"); return; }
+  if (!session || !connection || !connectedRequest) throw new Error("Connect this app first");
+  editingSession = true;
+  editDismissed = false;
+  try {
+    await session.resume();
+    if (editDismissed) return;
+    const journal = await session.options.journal.load();
+    if (!journal?.state || journal.stopped) throw new Error("Reconcile queued transactions before updating this session");
+    renderPolicyChoices();
+    const policyId = (p: PilotCellPolicy) => JSON.stringify([p.name,p.direction,p.lockHash,p.typeHash,p.dataHash,p.maxCapacity]);
+    const identities = journal.state.policies.map(policyId);
+    selectedPolicies = connectedRequest.policies.flatMap((p, i) => identities.includes(policyId(p)) ? [i] : []);
+    budget.value = ccc.fixedPointToString(BigInt(journal.state.remaining));
+    goTo("permissions");
+  } catch (e) { editingSession = false; throw e; }
+}, profile).className = "primary full";
 const profileHint = node("p", undefined, profile);
 const funding = node("details", undefined, review);
 funding.className = "funding-details";
@@ -958,14 +1010,18 @@ function goTo(step: ModalStep) {
   }
 }
 function renderModal() {
+  const request = pendingConnect?.request ?? (editingSession ? connectedRequest : undefined);
+  editNote.hidden = cancelEdit.hidden = !editingSession;
+  if (editingSession && request) editNote.textContent = `This replaces your remaining spending allowance; it does not deposit funds. App maximum: ${ccc.fixedPointToString(BigInt(request.budget))} CKB. Your account, session key and expiry stay the same. Sponsored network fees are excluded. App actions pause while you review.`;
+  grant.textContent = editingSession ? "Save changes with passkey" : "Approve session with passkey";
   loadAccountPolicies.hidden = !pendingConnect?.request.dynamicPolicies || !!policyAccountHash;
   loadAccountPolicies.disabled = busy || !authenticated;
   continueSession.disabled = busy || !resumable || !pendingConnect || !authenticated;
-  grant.disabled = !ready || !pendingConnect || !authenticated || !selectedPolicies.length || selectedPolicies.length > MAX_DELEGATED_ACTIONS || busy;
-  selectionCount.textContent = pendingConnect ? `${selectedPolicies.length} / ${MAX_DELEGATED_ACTIONS} policies selected · ${pendingConnect.request.policies.length} offered. Uncheck a policy to change your selection at the limit.` : '';
+  grant.disabled = !ready || !request || !authenticated || !selectedPolicies.length || selectedPolicies.length > MAX_DELEGATED_ACTIONS || busy;
+  selectionCount.textContent = request ? `${selectedPolicies.length} / ${MAX_DELEGATED_ACTIONS} policies selected · ${request.policies.length} offered. Uncheck a policy to change your selection at the limit.` : '';
   policyList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((box, i) => {
     box.checked = selectedPolicies.includes(i);
-    box.disabled = busy || !pendingConnect || (!box.checked && selectedPolicies.length >= MAX_DELEGATED_ACTIONS);
+    box.disabled = busy || !request || (!box.checked && selectedPolicies.length >= MAX_DELEGATED_ACTIONS);
   });
   if (!embedded) {
     welcome.hidden = profile.hidden = modalHeading.hidden = modalBack.hidden = authModes.hidden = funding.hidden = true;
@@ -977,7 +1033,7 @@ function renderModal() {
   profile.hidden = modalStep !== "profile";
   modalHeading.textContent = modalStep === "welcome" ? "Welcome to Pilot"
     : modalStep === "signin" ? (createMode ? "Create your Pilot account" : "Sign in to Pilot")
-    : modalStep === "permissions" ? "Sign these on my behalf" : (selected?.name || "Your Pilot profile");
+    : modalStep === "permissions" ? (editingSession ? "Update permissions and budget" : "Sign these on my behalf") : (selected?.name || "Your Pilot profile");
   modalBack.hidden = modalStep === "welcome" || modalStep === "profile" || (modalStep === "permissions" && !authenticated);
   (modalStep === "signin" ? accounts : profile).append(backup);
   modalBack.disabled = busy;
@@ -1008,7 +1064,7 @@ function renderModal() {
   profileHint.textContent = connection
     ? "Pilot is ready. Only your approved actions may run automatically."
     : "Review this app’s permissions to connect. No automatic actions are approved yet.";
-  budget.disabled = busy || !pendingConnect;
+  budget.disabled = busy || !request;
 }
 renderModal();
 if (embedded && peer) {
@@ -1170,6 +1226,14 @@ window.addEventListener("message", (event) => {
   )
     return;
   const request = event.data;
+  if (request.method === "cancelSessionEdit") {
+    if (editingSession) {
+      editDismissed = true;
+      cancelOwnerReview?.();
+      if (!busy) discardSessionEdit();
+    }
+    return;
+  }
   if (request.method === "cancelApproval") {
     if (request.id === activeRequestId) cancelOwnerReview?.();
     return;
@@ -1221,6 +1285,10 @@ window.addEventListener("message", (event) => {
     }
     return;
   }
+  if (editingSession && ["prepare", "send", "signMessage"].includes(request.method)) {
+    reply(request, undefined, "Session changes are being reviewed; finish or cancel them, then retry the same action ID");
+    return;
+  }
   operation = true;
   activeRequestId = request.id;
   void (async () => {
@@ -1237,6 +1305,8 @@ window.addEventListener("message", (event) => {
     if (request.method === "disconnect") {
       await session.endAppAccess();
       connection = undefined;
+      connectedRequest = undefined;
+      editingSession = false;
       return { stopped: true, onchainRevoked: false };
     }
     if (request.method === "logs") {

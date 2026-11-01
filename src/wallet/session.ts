@@ -819,8 +819,21 @@ export class PilotWalletSession extends ccc.Signer {
       return this.submit(j, r, false);
     });
   }
+  /** Owner-approved update of a connected session; identity, key and expiry stay unchanged. */
+  async updateSession(update: { policies: readonly PilotCellPolicy[]; budget: string }): Promise<ccc.Hex> {
+    const snapshot = structuredClone(update);
+    validatePilotPolicies(snapshot.policies);
+    if (!/^[1-9][0-9]*$/.test(snapshot.budget)) throw new Error("Choose a positive remaining spending allowance");
+    walletU64(BigInt(snapshot.budget));
+    const j = await this.journal();
+    if (!j.state) throw new Error("Missing active session state");
+    return this.grantState({ ...j.state, policies: [...snapshot.policies], remaining: snapshot.budget }, undefined, true);
+  }
   /** Owner confirms an on-chain grant. The initial transaction anchors the account with TYPE_ID. */
   async grant(state: PilotWalletState, capacity?: bigint): Promise<ccc.Hex> {
+    return this.grantState(state, capacity);
+  }
+  private async grantState(state: PilotWalletState, capacity?: bigint, updating = false): Promise<ccc.Hex> {
     // Snapshot reviewed permissions/budget; sequencing is wallet-managed after settlement.
     state = structuredClone(state);
     if (this.options.account.deployment.codeHash === PILOT_WALLET_GENERAL_CODE_HASH) state.mode = "templates";
@@ -835,6 +848,12 @@ export class PilotWalletSession extends ccc.Signer {
         )
           throw new Error("Grant does not match the selected app/key");
         const anchor = await this.anchor();
+        if (updating) {
+          const current = (await this.journal()).state;
+          if (!current || current.publicKey !== this.publicKey || current.appOrigin !== this.options.appOrigin ||
+              !anchor || anchor.outputData !== encodePilotWalletState(current))
+            throw new Error("Session changed; reconnect before updating permissions");
+        }
         if (anchor && anchor.outputData !== "0x") {
           const bytes = ccc.bytesFrom(anchor.outputData);
           if (bytes.length < 83 || bytes[0] !== (state.mode === "templates" ? 2 : 1) || bytes[82]! < 1 ||
@@ -903,6 +922,7 @@ export class PilotWalletSession extends ccc.Signer {
         return tx;
       },
       state,
+      updating,
     );
   }
   async revoke(): Promise<ccc.Hex> {
@@ -1079,6 +1099,7 @@ export class PilotWalletSession extends ccc.Signer {
     kind: "grant" | "revoke" | "recover",
     build: () => Promise<ccc.Transaction>,
     next?: PilotWalletState,
+    updating = false,
   ) {
     return this.options.exclusive(async () => {
       await this.verify();
@@ -1089,67 +1110,90 @@ export class PilotWalletSession extends ccc.Signer {
       }
       if (j.accountHash !== this.lock.hash())
         throw new Error("Account journal mismatch");
-      j.stopped = true;
-      await this.options.journal.save(j);
-      await this.resumeUnlocked();
-      j = await this.journal();
-      let tx = await build();
-      tx.cellDeps.push(
-        ccc.CellDep.from(deploymentDep(this.options.account.deployment)),
-      );
-      for (let i = tx.witnesses.length; i < tx.inputs.length; i++)
-        tx.witnesses.push("0x");
-      for (const [i, v] of tx.inputs.entries())
-        if (
-          (await this.client.getCell(v.previousOutput))?.cellOutput.lock.eq(
-            this.lock,
-          )
-        ) {
-          tx.setWitnessArgs(i, { ...tx.getWitnessArgs(i), lock: "0x00" });
-          break;
-        }
-      tx = await this.options.owner.prepareTransaction(tx);
-      for (const [i, output] of tx.outputs.entries()) {
-        if (
-          output.capacity <
-          ccc.fixedPointFrom(
-            output.occupiedSize + ccc.bytesFrom(tx.outputsData[i]!).length,
-          )
-        )
-          throw new Error(
-            "Output below occupied capacity; choose fewer policies or recover and fund a replacement account",
-          );
-      }
-      const quote = await this.options.paymaster.prepare(tx.clone());
-      const sponsored = await verifySponsorQuote(
-        this.client,
-        tx,
-        quote,
-        this.options.account.poolLock,
-        BigInt(this.options.account.maxFee),
-      );
-      const signed = await this.options.owner.signOnlyTransaction(sponsored);
-      if (signed.hash() !== sponsored.hash())
-        throw new Error("Owner changed reviewed transaction");
-      const r: PilotWalletReceipt = {
-        id: crypto.randomUUID(),
-        requestHash: ccc.hashCkb(tx.toBytes()),
-        hash: signed.hash(),
-        bytes: ccc.hexFrom(signed.toBytes()),
-        quote,
-        status: "signed",
-        kind,
-        next,
-        createdAt: Date.now(),
-      };
-      await this.save(j, r);
-      await this.submit(j, r, true);
-      j = await this.journal();
-      if (kind === "grant") {
-        j.stopped = false;
+      if (updating && (!j.state || j.state.publicKey !== this.publicKey ||
+          j.state.appOrigin !== this.options.appOrigin || this.options.expiresAt <= Date.now()))
+        throw new Error("Session changed or expired; reconnect before updating permissions");
+      const wasActive = !j.stopped;
+      let ownerSigned = false;
+      try {
+        j.stopped = true;
         await this.options.journal.save(j);
+        await this.resumeUnlocked();
+        j = await this.journal();
+        let tx = await build();
+        tx.cellDeps.push(
+          ccc.CellDep.from(deploymentDep(this.options.account.deployment)),
+        );
+        for (let i = tx.witnesses.length; i < tx.inputs.length; i++)
+          tx.witnesses.push("0x");
+        for (const [i, v] of tx.inputs.entries())
+          if (
+            (await this.client.getCell(v.previousOutput))?.cellOutput.lock.eq(
+              this.lock,
+            )
+          ) {
+            tx.setWitnessArgs(i, { ...tx.getWitnessArgs(i), lock: "0x00" });
+            break;
+          }
+        tx = await this.options.owner.prepareTransaction(tx);
+        for (const [i, output] of tx.outputs.entries()) {
+          if (
+            output.capacity <
+            ccc.fixedPointFrom(
+              output.occupiedSize + ccc.bytesFrom(tx.outputsData[i]!).length,
+            )
+          )
+            throw new Error(
+              "Output below occupied capacity; choose fewer policies or recover and fund a replacement account",
+            );
+        }
+        const quote = await this.options.paymaster.prepare(tx.clone());
+        const sponsored = await verifySponsorQuote(
+          this.client,
+          tx,
+          quote,
+          this.options.account.poolLock,
+          BigInt(this.options.account.maxFee),
+        );
+        const signed = await this.options.owner.signOnlyTransaction(sponsored);
+        ownerSigned = true;
+        if (signed.hash() !== sponsored.hash())
+          throw new Error("Owner changed reviewed transaction");
+        const r: PilotWalletReceipt = {
+          id: crypto.randomUUID(),
+          requestHash: ccc.hashCkb(tx.toBytes()),
+          hash: signed.hash(),
+          bytes: ccc.hexFrom(signed.toBytes()),
+          quote,
+          status: "signed",
+          kind,
+          next,
+          createdAt: Date.now(),
+        };
+        await this.save(j, r);
+        await this.submit(j, r, true);
+        j = await this.journal();
+        if (kind === "grant") {
+          j.stopped = false;
+          await this.options.journal.save(j);
+        }
+        return r.hash;
+      } catch (error) {
+        // A declined prompt/failed quote has not exposed a signed replacement.
+        // Never reactivate old authority after signing or while receipts are unresolved.
+        if (updating && wasActive && !ownerSigned) {
+          try {
+            const current = await this.journal(), anchor = await this.anchor();
+            if (current.state?.publicKey === this.publicKey && current.state.appOrigin === this.options.appOrigin &&
+                !current.receipts.some(r => r.status === "signed" || r.status === "submitted") &&
+                anchor?.outputData === encodePilotWalletState(current.state)) {
+              current.stopped = false;
+              await this.options.journal.save(current);
+            }
+          } catch { /* Preserve the stopped state if recovery cannot be verified. */ }
+        }
+        throw error;
       }
-      return r.hash;
     });
   }
 }

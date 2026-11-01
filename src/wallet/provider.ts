@@ -224,6 +224,10 @@ export class PilotWalletProvider {
       protocol: PILOT_WALLET_PROTOCOL, channel: this.channel,
       id: this.approvalRequest.id, method: "cancelApproval",
     } satisfies PilotWalletEnvelope, this.origin);
+    this.frame?.contentWindow?.postMessage({
+      protocol: PILOT_WALLET_PROTOCOL, channel: this.channel,
+      id: crypto.randomUUID(), method: "cancelSessionEdit",
+    } satisfies PilotWalletEnvelope, this.origin);
     this.dialog?.close();
   }
   async connect(request: PilotWalletConnect | PilotWalletDynamicConnect): Promise<PilotWalletConnection> {

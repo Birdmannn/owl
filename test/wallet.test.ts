@@ -1034,3 +1034,92 @@ test('selected mixed-wallet payout permission signs batches without another owne
   await assert.rejects(f.session.prepareAppTransaction(wrong),/approved action template/);
   assert.equal(f.signs,signs);assert.equal(reviews,0);
 });
+
+test('connected session updates settle receipts, replace remaining allowance and keep identity, key and expiry', async t => {
+  const f = await fixture(t);
+  const address = await f.session.getRecommendedAddress(), expiry = f.options.expiresAt;
+  await f.session.sendTransaction(await f.payment(), 'before-policy-edit');
+  const policies = [f.state.policies[1]!];
+  const budget = ccc.fixedPointFrom(100).toString();
+  await f.session.updateSession({policies, budget});
+  assert.equal(await f.session.getRecommendedAddress(), address);
+  assert.equal(f.options.expiresAt, expiry);
+  assert.equal(f.journal.state!.publicKey, f.state.publicKey);
+  assert.equal(f.journal.state!.sequence, '2');
+  assert.equal(f.journal.state!.remaining, budget);
+  assert.deepEqual(f.journal.state!.policies, policies);
+  assert.equal(f.signs, 2);
+  await f.session.signScopedMessage('social.like', 'post:123', 'after_edit_nonce_123456');
+  assert.equal(f.signs, 2, 'retained permissions sign automatically');
+  await assert.rejects(async () => f.session.sendTransaction(await f.payment(), 'removed-payment'), /polic|permission|approved/i);
+  const replacement = ccc.Transaction.fromBytes(f.journal.receipts.at(-1)!.bytes);
+  const prior = ccc.Transaction.fromBytes(f.journal.receipts[1]!.bytes);
+  const total = (tx: ccc.Transaction) => tx.outputs.filter(o => o.lock.eq(pilotWalletLock(f.account))).reduce((sum, o) => sum + o.capacity, 0n);
+  assert.equal(total(replacement), total(prior), 'updating allowance does not deposit funds');
+});
+
+test('declining an update or failing its quote keeps the prior grant usable', async t => {
+  for (const failQuote of [false, true]) {
+    const f = await fixture(t);
+    const before = structuredClone(f.journal.state), count = f.journal.receipts.length;
+    const target = failQuote ? f.options.paymaster : f.owner;
+    const mock = t.mock.method(target as any, failQuote ? 'prepare' : 'signOnlyTransaction', async () => {throw new Error('declined update');});
+    await assert.rejects(f.session.updateSession({policies: [f.state.policies[1]!], budget: '1'}), /declined update/);
+    mock.mock.restore();
+    assert.deepEqual(f.journal.state, before);
+    assert.equal(f.journal.receipts.length, count);
+    assert.equal(f.journal.stopped, false);
+    await f.session.signScopedMessage('social.like', 'post:123', 'cancel_edit_nonce_123456');
+  }
+});
+
+test('uncertain signed updates stay stopped and retain their exact receipt until reconciled', async t => {
+  const f = await fixture(t);
+  f.setLose(true);
+  await assert.rejects(f.session.updateSession({policies: [f.state.policies[1]!], budget: '123'}), /Lost response/);
+  assert.equal(f.journal.stopped, true);
+  assert.equal(f.journal.receipts.at(-1)!.status, 'signed');
+  await assert.rejects(f.session.signScopedMessage('social.like', 'post:123', 'stopped_edit_nonce_123456'), /stopped|Lost response/i);
+  f.setLose(false);
+  await f.session.resumeAppAccess();
+  assert.equal(f.journal.state!.remaining, '123');
+  assert.equal(f.journal.stopped, false);
+  assert.equal(f.signs, 2, 'reconciliation does not sign a replacement again');
+});
+
+test('session edits reject invalid allowance and wrong app, key or expiry before owner signing', async t => {
+  const f = await fixture(t);
+  for (const budget of ['0', '-1', '1.5', '18446744073709551616']) {
+    await assert.rejects(f.session.updateSession({policies: f.state.policies, budget}));
+  }
+  for (const options of [{appOrigin: 'https://other.example'}, {sessionKey: h(7)}, {expiresAt: 0}]) {
+    const wrong = new PilotWalletSession({...f.options, ...options});
+    await assert.rejects(wrong.updateSession({policies: f.state.policies, budget: '100'}), /changed|expired/i);
+  }
+  assert.equal(f.signs, 1);
+});
+
+test('newly selected message permissions sign automatically only after the owner-approved update', async t => {
+  const f = await fixture(t, true, true);
+  const policy = {...f.state.policies[1]!, name:'Comment on posts', lockHash:ccc.hashCkb(ccc.bytesFrom('social.comment', 'utf8'))};
+  await assert.rejects(f.session.signScopedMessage('social.comment', 'post:123', 'new_scope_nonce_123456'), /permission|selected|scope|policy/i);
+  await f.session.updateSession({policies:[f.state.policies[1]!, policy], budget:ccc.fixedPointFrom(300).toString()});
+  const value = await f.session.signScopedMessage('social.comment', 'post:123', 'new_scope_nonce_123456');
+  assert.equal(value.version, 1);
+  assert.equal(f.signs, 2);
+  assert.equal(f.journal.state!.remaining, ccc.fixedPointFrom(300).toString());
+});
+
+test('an unresolved prior transaction blocks permission updates before asking the owner to sign', async t => {
+  const f = await fixture(t);
+  f.setLose(true);
+  await assert.rejects(f.session.sendTransaction(await f.payment(), 'uncertain-before-edit'), /Lost response/);
+  await assert.rejects(f.session.updateSession({policies:f.state.policies, budget:'100'}), /Lost response/);
+  assert.equal(f.signs, 1);
+  assert.equal(f.journal.stopped, true);
+  assert.equal(f.journal.receipts.length, 2);
+  f.setLose(false);
+  await f.session.resumeAppAccess();
+  await f.session.updateSession({policies:f.state.policies, budget:'100'});
+  assert.equal(f.journal.state!.sequence, '2');
+});
